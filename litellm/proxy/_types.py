@@ -638,6 +638,15 @@ class LiteLLMRoutes(enum.Enum):
         KeyManagementRoutes.KEY_UPDATE.value,
     )
 
+    skill_submission_routes = (
+        "/claude-code/plugins/{plugin_name}/upload",
+        "/claude-code/skill-submissions",
+        "/claude-code/skill-submissions/{submission_id}",
+        "/claude-code/skill-submissions/{submission_id}/archive",
+        "/claude-code/skill-submissions/{submission_id}/approve",
+        "/claude-code/skill-submissions/{submission_id}/reject",
+    )
+
     management_routes = (
         [
             # user
@@ -700,6 +709,7 @@ class LiteLLMRoutes(enum.Enum):
         + key_management_routes
         + mcp_management_routes
         + list(agent_management_routes)
+        + list(skill_submission_routes)
     )
 
     spend_tracking_routes = [
@@ -942,6 +952,7 @@ class LiteLLMRoutes(enum.Enum):
         # Agent registry - reads are role-scoped and writes are proxy-admin-gated
         # inside agent_endpoints/endpoints.py
         *agent_management_routes,
+        *skill_submission_routes,
     ]  # routes that manage their own allowed/disallowed logic
 
     ## Org Admin Routes ##

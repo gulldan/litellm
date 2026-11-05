@@ -2482,44 +2482,7 @@ export interface paths {
         put?: never;
         /**
          * Register Plugin
-         * @description Register a new plugin in the LiteLLM marketplace.
-         *
-         *     LiteLLM acts as a registry/discovery layer. Plugins are hosted on
-         *     GitHub/GitLab/Bitbucket or as a zip archive on any https host (e.g. S3).
-         *     Claude Code clones the git source or downloads the archive when users install.
-         *
-         *     This endpoint is create-only and never overwrites. If a plugin with
-         *     the same name already exists it returns 409 Conflict; use
-         *     PUT /claude-code/plugins/{plugin_name} to update an existing plugin.
-         *
-         *     Requires a proxy admin API key.
-         *
-         *     Parameters:
-         *         - name: Plugin name (kebab-case)
-         *         - source: Plugin source reference (github, url, git-subdir, or archive format)
-         *         - version: Semantic version (optional)
-         *         - description: Plugin description (optional)
-         *         - author: Author information (optional)
-         *         - homepage: Plugin homepage URL (optional)
-         *         - keywords: Search keywords (optional)
-         *         - category: Plugin category (optional)
-         *         - installation_preference: 'available', 'auto_install', or 'required' (optional)
-         *
-         *     Returns:
-         *         Registration status (action is always "created") and plugin information.
-         *
-         *     Example:
-         *         ```bash
-         *         curl -X POST http://localhost:4000/claude-code/plugins \
-         *           -H "Authorization: Bearer sk-..." \
-         *           -H "Content-Type: application/json" \
-         *           -d '{
-         *             "name": "my-plugin",
-         *             "source": {"source": "github", "repo": "org/my-plugin"},
-         *             "version": "1.0.0",
-         *             "description": "My awesome plugin"
-         *           }'
-         *         ```
+         * @description Register a new skill. Members submit an immutable proposal; proxy admins publish directly. Duplicate names return 409.
          */
         post: operations["register_plugin_claude_code_plugins_post"];
         delete?: never;
@@ -2539,7 +2502,7 @@ export interface paths {
         put?: never;
         /**
          * Upload Plugin
-         * @description Create a skill and its uploaded ZIP atomically. Duplicate names return 409.
+         * @description Submit a sanitized skill ZIP for review, or publish it directly as a proxy admin. Names are create-only.
          */
         post: operations["upload_plugin_claude_code_plugins_upload_post"];
         delete?: never;
@@ -2568,45 +2531,7 @@ export interface paths {
         get: operations["get_plugin_claude_code_plugins__plugin_name__get"];
         /**
          * Update Plugin
-         * @description Update an existing plugin in the LiteLLM marketplace.
-         *
-         *     The plugin is identified by its name in the path, which is the resource
-         *     identity and cannot be changed here. This is a full replace, not a merge:
-         *     the manifest is rebuilt from the request body, so any optional field left
-         *     out is reset to its default, except version which automatically increments
-         *     the published patch version when omitted or null.
-         *     Send the full desired state.
-         *
-         *     Returns 404 if no plugin with the given name exists; use
-         *     POST /claude-code/plugins to create a new plugin.
-         *
-         *     Requires a proxy admin API key.
-         *
-         *     Parameters:
-         *         - plugin_name: Name of the plugin to update (path parameter)
-         *         - source: Plugin source reference (github, url, git-subdir, or archive format)
-         *         - version: Semantic version (optional)
-         *         - description: Plugin description (optional)
-         *         - author: Author information (optional)
-         *         - homepage: Plugin homepage URL (optional)
-         *         - keywords: Search keywords (optional)
-         *         - category: Plugin category (optional)
-         *         - installation_preference: 'available', 'auto_install', or 'required' (optional)
-         *
-         *     Returns:
-         *         Update status (action is always "updated") and plugin information.
-         *
-         *     Example:
-         *         ```bash
-         *         curl -X PUT http://localhost:4000/claude-code/plugins/my-plugin \
-         *           -H "Authorization: Bearer sk-..." \
-         *           -H "Content-Type: application/json" \
-         *           -d '{
-         *             "source": {"source": "github", "repo": "org/my-plugin"},
-         *             "version": "2.0.0",
-         *             "description": "My awesome plugin"
-         *           }'
-         *         ```
+         * @description Replace visible skill metadata. An omitted version requests an automatic patch bump when published.
          */
         put: operations["update_plugin_claude_code_plugins__plugin_name__put"];
         post?: never;
@@ -2695,6 +2620,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/claude-code/plugins/{plugin_name}/upload": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Update Uploaded Plugin
+         * @description Replace a visible skill with a sanitized ZIP. Members submit for review and proxy admins publish atomically.
+         */
+        put: operations["update_uploaded_plugin_claude_code_plugins__plugin_name__upload_put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/claude-code/plugins/{plugin_name}/versions": {
         parameters: {
             query?: never;
@@ -2728,6 +2673,106 @@ export interface paths {
          */
         get: operations["download_plugin_version_claude_code_plugins__plugin_name__versions__version_id__archive_get"];
         put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/claude-code/skill-submissions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Skill Submissions
+         * @description List the caller's immutable skill proposals. Proxy admins and admin viewers can read all proposals.
+         */
+        get: operations["list_skill_submissions_claude_code_skill_submissions_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/claude-code/skill-submissions/{submission_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Skill Submission
+         * @description Read an owned proposal and the visible published skill. Admins and admin viewers have review read access.
+         */
+        get: operations["get_skill_submission_claude_code_skill_submissions__submission_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/claude-code/skill-submissions/{submission_id}/approve": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Approve Skill Submission
+         * @description Publish a pending proposal and record approval atomically. Proxy admins only; stale or reviewed proposals return 409.
+         */
+        put: operations["approve_skill_submission_claude_code_skill_submissions__submission_id__approve_put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/claude-code/skill-submissions/{submission_id}/archive": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Download Skill Submission Archive
+         * @description Download a proposal's sanitized ZIP privately. Only its owner, proxy admins, and admin viewers may read it.
+         */
+        get: operations["download_skill_submission_archive_claude_code_skill_submissions__submission_id__archive_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/claude-code/skill-submissions/{submission_id}/reject": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Reject Skill Submission
+         * @description Reject a pending proposal without changing the catalog. Proxy admins only; optionally record a reason.
+         */
+        put: operations["reject_skill_submission_claude_code_skill_submissions__submission_id__reject_put"];
         post?: never;
         delete?: never;
         options?: never;
@@ -28158,6 +28203,19 @@ export interface components {
             /** Subject Token Type */
             subject_token_type?: string | null;
         };
+        /** Body_update_uploaded_plugin_claude_code_plugins__plugin_name__upload_put */
+        Body_update_uploaded_plugin_claude_code_plugins__plugin_name__upload_put: {
+            /**
+             * File
+             * @description Replacement skill ZIP containing SKILL.md, up to 10 MiB
+             */
+            file: string;
+            /**
+             * Metadata
+             * @description Full replacement metadata without name/source
+             */
+            metadata: string;
+        };
         /** Body_upload_logo_upload_logo_post */
         Body_upload_logo_upload_logo_post: {
             /** File */
@@ -34817,6 +34875,13 @@ export interface components {
         ListSearchToolsResponse: {
             /** Search Tools */
             search_tools: components["schemas"]["SearchToolInfoResponse"][];
+        };
+        /** ListSkillSubmissionsResponse */
+        ListSkillSubmissionsResponse: {
+            /** Count */
+            count: number;
+            /** Submissions */
+            submissions: components["schemas"]["SkillSubmissionResponse"][];
         };
         /**
          * ListSkillsResponse
@@ -43096,7 +43161,7 @@ export interface components {
         RegisterPluginResponse: {
             /**
              * Action
-             * @description Action taken (created/updated)
+             * @description Action taken (created/updated/submitted)
              */
             action: string;
             /** @description Plugin information */
@@ -43106,11 +43171,24 @@ export interface components {
              * @description Operation status
              */
             status: string;
+            /**
+             * Submission Id
+             * @description Pending review submission ID, absent for direct publication
+             */
+            submission_id?: string | null;
         };
         /** RejectMCPServerRequest */
         RejectMCPServerRequest: {
             /** Review Notes */
             review_notes?: string | null;
+        };
+        /** RejectSkillSubmissionRequest */
+        RejectSkillSubmissionRequest: {
+            /**
+             * Reason
+             * @description Optional explanation for the submitter
+             */
+            reason?: string | null;
         };
         /**
          * ReminderMarkerPair
@@ -45201,6 +45279,22 @@ export interface components {
             /** Timeouterrorretries */
             TimeoutErrorRetries?: number | null;
         };
+        /** ReviewSkillSubmissionResponse */
+        ReviewSkillSubmissionResponse: {
+            /**
+             * Action
+             * @enum {string}
+             */
+            action: "approved" | "rejected";
+            plugin: components["schemas"]["PluginResponse"] | null;
+            /**
+             * Status
+             * @default success
+             * @constant
+             */
+            status: "success";
+            submission: components["schemas"]["SkillSubmissionResponse"];
+        };
         /**
          * RoleMappings
          * @description Configuration for mapping SSO groups to LiteLLM roles.
@@ -46386,6 +46480,45 @@ export interface components {
             type: "skill_reference";
             /** Version */
             version?: string;
+        };
+        /** SkillSubmissionDetail */
+        SkillSubmissionDetail: {
+            current_plugin: components["schemas"]["PluginListItem"] | null;
+            submission: components["schemas"]["SkillSubmissionResponse"];
+        };
+        /** SkillSubmissionResponse */
+        SkillSubmissionResponse: {
+            /** Base Plugin Id */
+            base_plugin_id: string | null;
+            /** Base Updated At */
+            base_updated_at: string | null;
+            /** Created At */
+            created_at: string;
+            /** Has Archive */
+            has_archive: boolean;
+            /** Id */
+            id: string;
+            /**
+             * Operation
+             * @enum {string}
+             */
+            operation: "create" | "update";
+            /** Plugin Name */
+            plugin_name: string;
+            proposal: components["schemas"]["RegisterPluginRequest"];
+            /** Rejection Reason */
+            rejection_reason: string | null;
+            /** Reviewed At */
+            reviewed_at: string | null;
+            /** Reviewed By */
+            reviewed_by: string | null;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "pending_review" | "approved" | "rejected";
+            /** Submitted By */
+            submitted_by: string;
         };
         /** Span */
         Span: {
@@ -49768,6 +49901,56 @@ export interface components {
             tpd_limit?: number | null;
             /** Tpm Limit */
             tpm_limit?: number | null;
+        };
+        /** UpdateUploadedPluginRequest */
+        UpdateUploadedPluginRequest: {
+            /** @description Plugin author */
+            author?: components["schemas"]["PluginAuthor"] | null;
+            /**
+             * Category
+             * @description Plugin category
+             */
+            category?: string | null;
+            /**
+             * Description
+             * @description Plugin description
+             */
+            description?: string | null;
+            /**
+             * Domain
+             * @description Skill domain (e.g., 'Productivity')
+             */
+            domain?: string | null;
+            /**
+             * Expected Updated At
+             * @description Revision loaded by the editor
+             */
+            expected_updated_at?: string | null;
+            /**
+             * Homepage
+             * @description Plugin homepage URL
+             */
+            homepage?: string | null;
+            /**
+             * Installation Preference
+             * @description Emitted as installationPreference on this plugin's marketplace.json entry. Needs an archive source, the only plugins Claude Desktop lists from a marketplace.json URL, and 'auto_install' or 'required' also need its sha256. Claude Desktop honors the mark only when the archive and marketplace.json share its inference gateway origin
+             */
+            installation_preference?: ("available" | "auto_install" | "required") | null;
+            /**
+             * Keywords
+             * @description Search keywords
+             */
+            keywords?: string[] | null;
+            /**
+             * Namespace
+             * @description Skill namespace within domain (e.g., 'workflows')
+             */
+            namespace?: string | null;
+            /**
+             * Version
+             * @description Explicit higher SemVer, or omit/null for an automatic patch bump
+             */
+            version?: string | null;
         };
         /** UpdateUsefulLinksRequest */
         UpdateUsefulLinksRequest: {
@@ -56191,6 +56374,41 @@ export interface operations {
             };
         };
     };
+    update_uploaded_plugin_claude_code_plugins__plugin_name__upload_put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                plugin_name: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "multipart/form-data": components["schemas"]["Body_update_uploaded_plugin_claude_code_plugins__plugin_name__upload_put"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RegisterPluginResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     list_plugin_versions_claude_code_plugins__plugin_name__versions_get: {
         parameters: {
             query?: {
@@ -56243,6 +56461,165 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_skill_submissions_claude_code_skill_submissions_get: {
+        parameters: {
+            query?: {
+                status?: ("pending_review" | "approved" | "rejected") | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ListSkillSubmissionsResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_skill_submission_claude_code_skill_submissions__submission_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                submission_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SkillSubmissionDetail"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    approve_skill_submission_claude_code_skill_submissions__submission_id__approve_put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                submission_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReviewSkillSubmissionResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    download_skill_submission_archive_claude_code_skill_submissions__submission_id__archive_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                submission_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/zip": string;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    reject_skill_submission_claude_code_skill_submissions__submission_id__reject_put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                submission_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["RejectSkillSubmissionRequest"] | null;
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReviewSkillSubmissionResponse"];
+                };
             };
             /** @description Validation Error */
             422: {

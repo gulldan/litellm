@@ -65,8 +65,23 @@ class PluginVersion:
     archive_available: bool
 
 
+@dataclass(frozen=True, slots=True)
+class PluginSnapshot:
+    id: str
+    name: str
+    version: str | None
+    description: str | None
+    manifest: Mapping[str, object]
+    enabled: bool
+    created_at: datetime | None
+    updated_at: datetime | None
+    created_by: str | None
+
+
 class PluginUploadStore(Protocol):
     async def create(self, upload: PluginUpload) -> str | None: ...
+
+    async def get_plugin(self, name: str) -> PluginSnapshot | None: ...
 
     async def publish(
         self, publication: PluginPublication, expected: PluginPublicationBase | None = None

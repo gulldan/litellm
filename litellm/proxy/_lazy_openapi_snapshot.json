@@ -7454,6 +7454,31 @@
   "claude_code_marketplace": {
     "components": {
       "schemas": {
+        "Body_update_uploaded_plugin_claude_code_plugins__plugin_name__upload_put": {
+          "properties": {
+            "file": {
+              "contentMediaType": "application/octet-stream",
+              "description": "Replacement skill ZIP containing SKILL.md, up to 10 MiB",
+              "title": "File",
+              "type": "string"
+            },
+            "metadata": {
+              "contentMediaType": "application/json",
+              "contentSchema": {
+                "$ref": "#/components/schemas/UpdateUploadedPluginRequest"
+              },
+              "description": "Full replacement metadata without name/source",
+              "title": "Metadata",
+              "type": "string"
+            }
+          },
+          "required": [
+            "file",
+            "metadata"
+          ],
+          "title": "Body_update_uploaded_plugin_claude_code_plugins__plugin_name__upload_put",
+          "type": "object"
+        },
         "Body_upload_plugin_claude_code_plugins_upload_post": {
           "properties": {
             "file": {
@@ -7540,6 +7565,27 @@
             "count"
           ],
           "title": "ListPluginsResponse",
+          "type": "object"
+        },
+        "ListSkillSubmissionsResponse": {
+          "properties": {
+            "count": {
+              "title": "Count",
+              "type": "integer"
+            },
+            "submissions": {
+              "items": {
+                "$ref": "#/components/schemas/SkillSubmissionResponse"
+              },
+              "title": "Submissions",
+              "type": "array"
+            }
+          },
+          "required": [
+            "submissions",
+            "count"
+          ],
+          "title": "ListSkillSubmissionsResponse",
           "type": "object"
         },
         "PluginAuthor": {
@@ -8044,7 +8090,7 @@
           "description": "Response from plugin registration.",
           "properties": {
             "action": {
-              "description": "Action taken (created/updated)",
+              "description": "Action taken (created/updated/submitted)",
               "title": "Action",
               "type": "string"
             },
@@ -8056,6 +8102,18 @@
               "description": "Operation status",
               "title": "Status",
               "type": "string"
+            },
+            "submission_id": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Pending review submission ID, absent for direct publication",
+              "title": "Submission Id"
             }
           },
           "required": [
@@ -8064,6 +8122,202 @@
             "plugin"
           ],
           "title": "RegisterPluginResponse",
+          "type": "object"
+        },
+        "RejectSkillSubmissionRequest": {
+          "properties": {
+            "reason": {
+              "anyOf": [
+                {
+                  "maxLength": 2000,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional explanation for the submitter",
+              "title": "Reason"
+            }
+          },
+          "title": "RejectSkillSubmissionRequest",
+          "type": "object"
+        },
+        "ReviewSkillSubmissionResponse": {
+          "properties": {
+            "action": {
+              "enum": [
+                "approved",
+                "rejected"
+              ],
+              "title": "Action",
+              "type": "string"
+            },
+            "plugin": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/PluginResponse"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "status": {
+              "const": "success",
+              "default": "success",
+              "title": "Status",
+              "type": "string"
+            },
+            "submission": {
+              "$ref": "#/components/schemas/SkillSubmissionResponse"
+            }
+          },
+          "required": [
+            "action",
+            "submission",
+            "plugin"
+          ],
+          "title": "ReviewSkillSubmissionResponse",
+          "type": "object"
+        },
+        "SkillSubmissionDetail": {
+          "properties": {
+            "current_plugin": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/PluginListItem"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "submission": {
+              "$ref": "#/components/schemas/SkillSubmissionResponse"
+            }
+          },
+          "required": [
+            "submission",
+            "current_plugin"
+          ],
+          "title": "SkillSubmissionDetail",
+          "type": "object"
+        },
+        "SkillSubmissionResponse": {
+          "properties": {
+            "base_plugin_id": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Base Plugin Id"
+            },
+            "base_updated_at": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Base Updated At"
+            },
+            "created_at": {
+              "title": "Created At",
+              "type": "string"
+            },
+            "has_archive": {
+              "title": "Has Archive",
+              "type": "boolean"
+            },
+            "id": {
+              "title": "Id",
+              "type": "string"
+            },
+            "operation": {
+              "enum": [
+                "create",
+                "update"
+              ],
+              "title": "Operation",
+              "type": "string"
+            },
+            "plugin_name": {
+              "title": "Plugin Name",
+              "type": "string"
+            },
+            "proposal": {
+              "$ref": "#/components/schemas/RegisterPluginRequest"
+            },
+            "rejection_reason": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Rejection Reason"
+            },
+            "reviewed_at": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Reviewed At"
+            },
+            "reviewed_by": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Reviewed By"
+            },
+            "status": {
+              "enum": [
+                "pending_review",
+                "approved",
+                "rejected"
+              ],
+              "title": "Status",
+              "type": "string"
+            },
+            "submitted_by": {
+              "title": "Submitted By",
+              "type": "string"
+            }
+          },
+          "required": [
+            "id",
+            "plugin_name",
+            "operation",
+            "status",
+            "proposal",
+            "has_archive",
+            "submitted_by",
+            "created_at",
+            "base_plugin_id",
+            "base_updated_at",
+            "reviewed_by",
+            "reviewed_at",
+            "rejection_reason"
+          ],
+          "title": "SkillSubmissionResponse",
           "type": "object"
         },
         "UpdatePluginRequest": {
@@ -8210,6 +8464,140 @@
             "source"
           ],
           "title": "UpdatePluginRequest",
+          "type": "object"
+        },
+        "UpdateUploadedPluginRequest": {
+          "properties": {
+            "author": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/PluginAuthor"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Plugin author"
+            },
+            "category": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Plugin category",
+              "title": "Category"
+            },
+            "description": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Plugin description",
+              "title": "Description"
+            },
+            "domain": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Skill domain (e.g., 'Productivity')",
+              "title": "Domain"
+            },
+            "expected_updated_at": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Revision loaded by the editor",
+              "title": "Expected Updated At"
+            },
+            "homepage": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Plugin homepage URL",
+              "title": "Homepage"
+            },
+            "installation_preference": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "available",
+                    "auto_install",
+                    "required"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Emitted as installationPreference on this plugin's marketplace.json entry. Needs an archive source, the only plugins Claude Desktop lists from a marketplace.json URL, and 'auto_install' or 'required' also need its sha256. Claude Desktop honors the mark only when the archive and marketplace.json share its inference gateway origin",
+              "title": "Installation Preference"
+            },
+            "keywords": {
+              "anyOf": [
+                {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Search keywords",
+              "title": "Keywords"
+            },
+            "namespace": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Skill namespace within domain (e.g., 'workflows')",
+              "title": "Namespace"
+            },
+            "version": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Explicit higher SemVer, or omit/null for an automatic patch bump",
+              "title": "Version"
+            }
+          },
+          "title": "UpdateUploadedPluginRequest",
           "type": "object"
         },
         "UploadPluginRequest": {
@@ -8483,7 +8871,7 @@
           ]
         },
         "post": {
-          "description": "Register a new plugin in the LiteLLM marketplace.\n\nLiteLLM acts as a registry/discovery layer. Plugins are hosted on\nGitHub/GitLab/Bitbucket or as a zip archive on any https host (e.g. S3).\nClaude Code clones the git source or downloads the archive when users install.\n\nThis endpoint is create-only and never overwrites. If a plugin with\nthe same name already exists it returns 409 Conflict; use\nPUT /claude-code/plugins/{plugin_name} to update an existing plugin.\n\nRequires a proxy admin API key.\n\nParameters:\n    - name: Plugin name (kebab-case)\n    - source: Plugin source reference (github, url, git-subdir, or archive format)\n    - version: Semantic version (optional)\n    - description: Plugin description (optional)\n    - author: Author information (optional)\n    - homepage: Plugin homepage URL (optional)\n    - keywords: Search keywords (optional)\n    - category: Plugin category (optional)\n    - installation_preference: 'available', 'auto_install', or 'required' (optional)\n\nReturns:\n    Registration status (action is always \"created\") and plugin information.\n\nExample:\n    ```bash\n    curl -X POST http://localhost:4000/claude-code/plugins \\\n      -H \"Authorization: Bearer sk-...\" \\\n      -H \"Content-Type: application/json\" \\\n      -d '{\n        \"name\": \"my-plugin\",\n        \"source\": {\"source\": \"github\", \"repo\": \"org/my-plugin\"},\n        \"version\": \"1.0.0\",\n        \"description\": \"My awesome plugin\"\n      }'\n    ```",
+          "description": "Register a new skill. Members submit an immutable proposal; proxy admins publish directly. Duplicate names return 409.",
           "operationId": "register_plugin_claude_code_plugins_post",
           "requestBody": {
             "content": {
@@ -8530,7 +8918,7 @@
       },
       "/claude-code/plugins/upload": {
         "post": {
-          "description": "Create a skill and its uploaded ZIP atomically. Duplicate names return 409.",
+          "description": "Submit a sanitized skill ZIP for review, or publish it directly as a proxy admin. Names are create-only.",
           "operationId": "upload_plugin_claude_code_plugins_upload_post",
           "requestBody": {
             "content": {
@@ -8665,7 +9053,7 @@
           ]
         },
         "put": {
-          "description": "Update an existing plugin in the LiteLLM marketplace.\n\nThe plugin is identified by its name in the path, which is the resource\nidentity and cannot be changed here. This is a full replace, not a merge:\nthe manifest is rebuilt from the request body, so any optional field left\nout is reset to its default, except version which automatically increments\nthe published patch version when omitted or null.\nSend the full desired state.\n\nReturns 404 if no plugin with the given name exists; use\nPOST /claude-code/plugins to create a new plugin.\n\nRequires a proxy admin API key.\n\nParameters:\n    - plugin_name: Name of the plugin to update (path parameter)\n    - source: Plugin source reference (github, url, git-subdir, or archive format)\n    - version: Semantic version (optional)\n    - description: Plugin description (optional)\n    - author: Author information (optional)\n    - homepage: Plugin homepage URL (optional)\n    - keywords: Search keywords (optional)\n    - category: Plugin category (optional)\n    - installation_preference: 'available', 'auto_install', or 'required' (optional)\n\nReturns:\n    Update status (action is always \"updated\") and plugin information.\n\nExample:\n    ```bash\n    curl -X PUT http://localhost:4000/claude-code/plugins/my-plugin \\\n      -H \"Authorization: Bearer sk-...\" \\\n      -H \"Content-Type: application/json\" \\\n      -d '{\n        \"source\": {\"source\": \"github\", \"repo\": \"org/my-plugin\"},\n        \"version\": \"2.0.0\",\n        \"description\": \"My awesome plugin\"\n      }'\n    ```",
+          "description": "Replace visible skill metadata. An omitted version requests an automatic patch bump when published.",
           "operationId": "update_plugin_claude_code_plugins__plugin_name__put",
           "parameters": [
             {
@@ -8866,6 +9254,64 @@
           ]
         }
       },
+      "/claude-code/plugins/{plugin_name}/upload": {
+        "put": {
+          "description": "Replace a visible skill with a sanitized ZIP. Members submit for review and proxy admins publish atomically.",
+          "operationId": "update_uploaded_plugin_claude_code_plugins__plugin_name__upload_put",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "plugin_name",
+              "required": true,
+              "schema": {
+                "title": "Plugin Name",
+                "type": "string"
+              }
+            }
+          ],
+          "requestBody": {
+            "content": {
+              "multipart/form-data": {
+                "schema": {
+                  "$ref": "#/components/schemas/Body_update_uploaded_plugin_claude_code_plugins__plugin_name__upload_put"
+                }
+              }
+            },
+            "required": true
+          },
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/RegisterPluginResponse"
+                  }
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Update Uploaded Plugin",
+          "tags": [
+            "claude_code_marketplace"
+          ]
+        }
+      },
       "/claude-code/plugins/{plugin_name}/versions": {
         "get": {
           "description": "Read published metadata history. External source references are not archived content.",
@@ -8982,6 +9428,276 @@
             }
           ],
           "summary": "Download Plugin Version",
+          "tags": [
+            "claude_code_marketplace"
+          ]
+        }
+      },
+      "/claude-code/skill-submissions": {
+        "get": {
+          "description": "List the caller's immutable skill proposals. Proxy admins and admin viewers can read all proposals.",
+          "operationId": "list_skill_submissions_claude_code_skill_submissions_get",
+          "parameters": [
+            {
+              "in": "query",
+              "name": "status",
+              "required": false,
+              "schema": {
+                "anyOf": [
+                  {
+                    "enum": [
+                      "pending_review",
+                      "approved",
+                      "rejected"
+                    ],
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Status"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/ListSkillSubmissionsResponse"
+                  }
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "List Skill Submissions",
+          "tags": [
+            "claude_code_marketplace"
+          ]
+        }
+      },
+      "/claude-code/skill-submissions/{submission_id}": {
+        "get": {
+          "description": "Read an owned proposal and the visible published skill. Admins and admin viewers have review read access.",
+          "operationId": "get_skill_submission_claude_code_skill_submissions__submission_id__get",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "submission_id",
+              "required": true,
+              "schema": {
+                "title": "Submission Id",
+                "type": "string"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/SkillSubmissionDetail"
+                  }
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Get Skill Submission",
+          "tags": [
+            "claude_code_marketplace"
+          ]
+        }
+      },
+      "/claude-code/skill-submissions/{submission_id}/approve": {
+        "put": {
+          "description": "Publish a pending proposal and record approval atomically. Proxy admins only; stale or reviewed proposals return 409.",
+          "operationId": "approve_skill_submission_claude_code_skill_submissions__submission_id__approve_put",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "submission_id",
+              "required": true,
+              "schema": {
+                "title": "Submission Id",
+                "type": "string"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/ReviewSkillSubmissionResponse"
+                  }
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Approve Skill Submission",
+          "tags": [
+            "claude_code_marketplace"
+          ]
+        }
+      },
+      "/claude-code/skill-submissions/{submission_id}/archive": {
+        "get": {
+          "description": "Download a proposal's sanitized ZIP privately. Only its owner, proxy admins, and admin viewers may read it.",
+          "operationId": "download_skill_submission_archive_claude_code_skill_submissions__submission_id__archive_get",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "submission_id",
+              "required": true,
+              "schema": {
+                "title": "Submission Id",
+                "type": "string"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/zip": {
+                  "schema": {
+                    "format": "binary",
+                    "type": "string"
+                  }
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Download Skill Submission Archive",
+          "tags": [
+            "claude_code_marketplace"
+          ]
+        }
+      },
+      "/claude-code/skill-submissions/{submission_id}/reject": {
+        "put": {
+          "description": "Reject a pending proposal without changing the catalog. Proxy admins only; optionally record a reason.",
+          "operationId": "reject_skill_submission_claude_code_skill_submissions__submission_id__reject_put",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "submission_id",
+              "required": true,
+              "schema": {
+                "title": "Submission Id",
+                "type": "string"
+              }
+            }
+          ],
+          "requestBody": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/RejectSkillSubmissionRequest"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "title": "Request"
+                }
+              }
+            }
+          },
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/ReviewSkillSubmissionResponse"
+                  }
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Reject Skill Submission",
           "tags": [
             "claude_code_marketplace"
           ]

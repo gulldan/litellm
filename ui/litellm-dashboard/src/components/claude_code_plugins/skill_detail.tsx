@@ -86,9 +86,10 @@ interface SkillDetailProps {
   isAdmin?: boolean;
   accessToken?: string | null;
   onPublishClick?: () => void;
+  onEditClick?: () => void;
 }
 
-const SkillDetail: React.FC<SkillDetailProps> = ({ skill, onBack, accessToken }) => {
+const SkillDetail: React.FC<SkillDetailProps> = ({ skill, onBack, accessToken, onEditClick }) => {
   const { t } = useTranslation();
   const [activeTab, setActiveTab] = useState("overview");
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
@@ -150,7 +151,14 @@ const SkillDetail: React.FC<SkillDetailProps> = ({ skill, onBack, accessToken })
 
       {/* Header */}
       <div className="mb-2">
-        <h1 className="m-0 text-[28px] font-normal leading-tight text-foreground">{skill.name}</h1>
+        <div className="flex items-center justify-between gap-4">
+          <h1 className="m-0 text-[28px] font-normal leading-tight text-foreground">{skill.name}</h1>
+          {onEditClick && (
+            <Button variant="outline" onClick={onEditClick}>
+              {t("skills.panel.editButton")}
+            </Button>
+          )}
+        </div>
         {skill.description && (
           <p className="mb-0 ml-0 mr-0 mt-2 text-sm leading-relaxed text-muted-foreground">{skill.description}</p>
         )}

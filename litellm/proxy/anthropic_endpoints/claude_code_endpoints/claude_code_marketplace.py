@@ -9,10 +9,10 @@ any HTTPS host (S3, Artifactory, a static file server).
 Endpoints:
 /claude-code/marketplace.json  - GET  - List plugins for Claude Code discovery (anonymous unless
                                  general_settings.claude_code_marketplace_auth_required; a key adds its granted skills)
-/claude-code/plugins           - POST - Register a new plugin (create-only, proxy admin only)
+/claude-code/plugins           - POST - Register a new plugin (members submit for review, admins publish)
 /claude-code/plugins           - GET  - List plugins visible to the key (enabled, plus granted disabled ones)
 /claude-code/plugins/{name}    - GET  - Get plugin details (403 on a disabled plugin the key is not granted)
-/claude-code/plugins/{name}    - PUT  - Update an existing plugin (proxy admin only)
+/claude-code/plugins/{name}    - PUT  - Replace a plugin (members submit for review, admins publish)
 /claude-code/plugins/{name}/enable  - POST - Enable a plugin (proxy admin only)
 /claude-code/plugins/{name}/disable - POST - Disable a plugin (proxy admin only)
 /claude-code/plugins/{name}    - DELETE - Delete a plugin (proxy admin only)
@@ -25,7 +25,7 @@ import re
 from collections.abc import Mapping, Sequence
 from datetime import datetime, timezone
 from types import MappingProxyType
-from typing import Annotated, Final, Protocol, TypedDict, get_args
+from typing import Annotated, Final, Protocol, TypedDict, assert_never, get_args
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, UploadFile
 from fastapi.responses import JSONResponse, Response
@@ -38,6 +38,15 @@ from litellm.models.plugin_upload import (
     PluginPublication,
     PluginPublicationBase,
     PluginPublicationError,
+    PluginSnapshot,
+    PublishedPlugin,
+)
+from litellm.models.skill_submission import (
+    SkillSubmission,
+    SubmissionConflict,
+    SubmissionMissing,
+    SubmissionReviewed,
+    SubmissionStatus,
 )
 from litellm.proxy._types import CommonProxyErrors, ProxyErrorTypes, ProxyException, UserAPIKeyAuth
 from litellm.proxy.anthropic_endpoints.claude_code_endpoints.claude_code_skill_access import (
@@ -55,20 +64,28 @@ from litellm.proxy.common_utils.claude_code_marketplace_auth import (
     marketplace_key_header_present,
 )
 from litellm.proxy.common_utils.resource_ownership import is_proxy_admin
-from litellm.proxy.deps.repositories import PluginUploadRepositoryDep
+from litellm.proxy.deps.repositories import PluginUploadRepositoryDep, SkillSubmissionRepositoryDep
+from litellm.repositories.plugin_publication import resolve_plugin_version
 from litellm.repositories.table_repositories import ClaudeCodePluginRepository
 from litellm.types.proxy.auth.special_headers import SpecialHeaders
+from litellm.types.proxy.auth.user_roles import LitellmUserRoles
 from litellm.types.proxy.claude_code_endpoints import (
     InstallationPreference,
     ListPluginsResponse,
     ListPluginVersionsResponse,
+    ListSkillSubmissionsResponse,
     PluginListItem,
     PluginResponse,
     PluginSpec,
     PluginVersionResponse,
     RegisterPluginRequest,
     RegisterPluginResponse,
+    RejectSkillSubmissionRequest,
+    ReviewSkillSubmissionResponse,
+    SkillSubmissionDetail,
+    SkillSubmissionResponse,
     UpdatePluginRequest,
+    UpdateUploadedPluginRequest,
     UploadPluginRequest,
 )
 
@@ -166,28 +183,15 @@ async def _marketplace_caller(request: Request, key: str | None) -> UserAPIKeyAu
     return None
 
 
-@router.post(
-    "/claude-code/plugins/upload",
-    tags=["Claude Code Marketplace"],
-    response_model=RegisterPluginResponse,
-)
-async def upload_plugin(
-    request: Request,
-    uploads: PluginUploadRepositoryDep,
-    user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
-    file: Annotated[UploadFile, File(description="Skill ZIP containing SKILL.md and supporting files, up to 10 MiB")],
-    metadata: Annotated[Json[UploadPluginRequest], Form(description="JSON skill metadata without a source URL")],
-) -> RegisterPluginResponse:
-    """Create a skill and its uploaded ZIP atomically. Duplicate names return 409."""
+async def _uploaded_spec(
+    request: Request, file: UploadFile, name: str, metadata: UploadPluginRequest | UpdateUploadedPluginRequest
+) -> tuple[RegisterPluginRequest, bytes]:
     from litellm.proxy.utils import get_custom_url
 
-    _require_proxy_admin(user_api_key_dict)
-    if uploads is None:
-        raise _error_response(500, CommonProxyErrors.db_not_connected_error.value)
     content: Final = await file.read(MAX_SKILL_UPLOAD_BYTES + 1)
     if len(content) > MAX_SKILL_UPLOAD_BYTES:
         raise _error_response(413, "Skill ZIP must be 10 MiB or smaller")
-    archive: Final = await asyncio.to_thread(build_uploaded_skill_archive, content, metadata.name)
+    archive: Final = await asyncio.to_thread(build_uploaded_skill_archive, content, name)
     if archive is None:
         raise _error_response(
             400, "Upload a valid ZIP with SKILL.md at the root or inside one skill folder, and safe supporting files"
@@ -197,36 +201,57 @@ async def upload_plugin(
         "source": "archive",
         "url": get_custom_url(
             request_base_url=str(request.base_url),
-            route=f"claude-code/plugins/{metadata.name}/archive/{digest}.zip",
+            route=f"claude-code/plugins/{name}/archive/{digest}.zip",
         ),
         "sha256": digest,
     }
-    spec: Final = RegisterPluginRequest.model_validate({**metadata.model_dump(), "source": source})
-    _validate_installation_preference(spec)
-    published: Final = await uploads.publish(
-        PluginPublication(
-            name=spec.name,
-            version=spec.version,
-            description=spec.description,
-            manifest=_build_plugin_manifest(spec.name, spec),
-            content=archive,
-            created_by=user_api_key_dict.user_id,
-        )
-    )
-    if isinstance(published, PluginPublicationError):
-        raise _publication_error(published)
-    return RegisterPluginResponse(
-        status="success",
-        action="created",
-        plugin=PluginResponse(
-            id=published.id,
-            name=spec.name,
-            version=published.version,
-            description=spec.description,
-            source=source,
-            installation_preference=spec.installation_preference,
-            enabled=True,
-        ),
+    return RegisterPluginRequest.model_validate({**metadata.model_dump(), "name": name, "source": source}), archive
+
+
+@router.post(
+    "/claude-code/plugins/upload",
+    tags=["Claude Code Marketplace"],
+    response_model=RegisterPluginResponse,
+)
+async def upload_plugin(
+    request: Request,
+    uploads: PluginUploadRepositoryDep,
+    submissions: SkillSubmissionRepositoryDep,
+    user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
+    file: Annotated[UploadFile, File(description="Skill ZIP containing SKILL.md and supporting files, up to 10 MiB")],
+    metadata: Annotated[Json[UploadPluginRequest], Form(description="JSON skill metadata without a source URL")],
+) -> RegisterPluginResponse:
+    """Submit a sanitized skill ZIP for review, or publish it directly as a proxy admin. Names are create-only."""
+    _require_skill_writer(user_api_key_dict)
+    if uploads is None:
+        raise _error_response(500, CommonProxyErrors.db_not_connected_error.value)
+    spec, archive = await _uploaded_spec(request, file, metadata.name, metadata)
+    return await _write_skill(spec.name, spec, archive, False, uploads, submissions, user_api_key_dict)
+
+
+@router.put(
+    "/claude-code/plugins/{plugin_name}/upload",
+    tags=["Claude Code Marketplace"],
+    response_model=RegisterPluginResponse,
+)
+async def update_uploaded_plugin(
+    plugin_name: str,
+    request: Request,
+    uploads: PluginUploadRepositoryDep,
+    submissions: SkillSubmissionRepositoryDep,
+    user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
+    file: Annotated[UploadFile, File(description="Replacement skill ZIP containing SKILL.md, up to 10 MiB")],
+    metadata: Annotated[
+        Json[UpdateUploadedPluginRequest], Form(description="Full replacement metadata without name/source")
+    ],
+) -> RegisterPluginResponse:
+    """Replace a visible skill with a sanitized ZIP. Members submit for review and proxy admins publish atomically."""
+    _require_skill_writer(user_api_key_dict)
+    if uploads is None:
+        raise _error_response(500, CommonProxyErrors.db_not_connected_error.value)
+    spec, archive = await _uploaded_spec(request, file, plugin_name, metadata)
+    return await _write_skill(
+        plugin_name, spec, archive, True, uploads, submissions, user_api_key_dict, metadata.expected_updated_at
     )
 
 
@@ -480,6 +505,12 @@ def _publication_error(error: PluginPublicationError) -> HTTPException:
             return _error_response(409, error.message)
 
 
+def _name_conflict_error(name: str) -> HTTPException:
+    return _error_response(
+        409, f"A skill named '{name}' already exists. Update the existing skill instead of adding it again."
+    )
+
+
 def _require_proxy_admin(user_api_key_dict: UserAPIKeyAuth) -> None:
     """Catalog mutations are restricted to proxy admins: marketplace.json is served
     unauthenticated and any registered/updated entry is immediately installable by
@@ -492,110 +523,114 @@ def _require_proxy_admin(user_api_key_dict: UserAPIKeyAuth) -> None:
         )
 
 
+def _require_skill_writer(caller: UserAPIKeyAuth) -> None:
+    if is_proxy_admin(caller):
+        return
+    if (
+        not caller.user_id
+        or caller.user_id == DB_UNAVAILABLE_FALLBACK_USER_ID
+        or caller.user_role in (None, LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY, LitellmUserRoles.INTERNAL_USER_VIEW_ONLY)
+    ):
+        raise _error_response(403, "Submitting a skill requires a writable user identity.")
+
+
+def _plugin_response(plugin: PublishedPlugin, spec: PluginSpec) -> PluginResponse:
+    return PluginResponse(
+        id=plugin.id,
+        name=plugin.name,
+        version=plugin.version,
+        description=spec.description,
+        source=spec.source,
+        installation_preference=spec.installation_preference,
+        enabled=plugin.enabled,
+    )
+
+
+async def _write_skill(
+    name: str,
+    spec: PluginSpec,
+    content: bytes | None,
+    updating: bool,
+    uploads: PluginUploadRepositoryDep,
+    submissions: SkillSubmissionRepositoryDep,
+    caller: UserAPIKeyAuth,
+    expected_updated_at: datetime | None = None,
+) -> RegisterPluginResponse:
+    from prisma.errors import PrismaError
+
+    _require_skill_writer(caller)
+    if uploads is None or (not is_proxy_admin(caller) and submissions is None):
+        raise _error_response(500, CommonProxyErrors.db_not_connected_error.value)
+    try:
+        existing: Final = await uploads.get_plugin(name)
+        if updating and (existing is None or not (await resolve_skill_visibility(caller)).allows(existing)):
+            raise _error_response(404, "Skill not found")
+        if existing is not None and expected_updated_at is not None and existing.updated_at != expected_updated_at:
+            raise _error_response(409, "The published skill changed. Reload it before submitting.")
+        if not updating and existing is not None:
+            raise _name_conflict_error(name)
+        if content is None and (existing is None or spec.source != existing.manifest.get("source")):
+            _validate_plugin_source(spec.source)
+        _validate_installation_preference(spec)
+        version_validation: Final = resolve_plugin_version(
+            spec.version, None if existing is None else existing.version, updating=updating
+        )
+        if isinstance(version_validation, PluginPublicationError):
+            raise _publication_error(version_validation)
+        upload: Final = PluginPublication(
+            name=name,
+            version=spec.version,
+            description=spec.description,
+            manifest=_build_plugin_manifest(name, spec),
+            content=content,
+            created_by=caller.user_id,
+        )
+        expected: Final = None if existing is None else PluginPublicationBase(existing.id, existing.updated_at)
+        if not is_proxy_admin(caller):
+            if submissions is None or not caller.user_id:
+                raise _error_response(403, "Submitting a skill requires a writable user identity.")
+            submission: Final = await submissions.submit(upload, caller.user_id, expected)
+            return RegisterPluginResponse(
+                status="pending_review",
+                action="submitted",
+                submission_id=submission.id,
+                plugin=PluginResponse(
+                    id=submission.id,
+                    name=name,
+                    version=spec.version,
+                    description=spec.description,
+                    source=spec.source,
+                    installation_preference=spec.installation_preference,
+                    enabled=False,
+                ),
+            )
+        result: Final = await uploads.publish(upload, expected)
+        if isinstance(result, PluginPublicationError):
+            raise _publication_error(result)
+        return RegisterPluginResponse(
+            status="success",
+            action="updated" if updating else "created",
+            plugin=_plugin_response(result, spec),
+            submission_id=None,
+        )
+    except PrismaError:
+        verbose_proxy_logger.exception("Error writing skill %s", name)
+        raise _error_response(500, "Skill write failed")
+
+
 @router.post(
     "/claude-code/plugins",
     tags=["Claude Code Marketplace"],
-    dependencies=[Depends(user_api_key_auth)],
     response_model=RegisterPluginResponse,
 )
 async def register_plugin(
     request: RegisterPluginRequest,
     uploads: PluginUploadRepositoryDep,
+    submissions: SkillSubmissionRepositoryDep,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
-):
-    """
-    Register a new plugin in the LiteLLM marketplace.
-
-    LiteLLM acts as a registry/discovery layer. Plugins are hosted on
-    GitHub/GitLab/Bitbucket or as a zip archive on any https host (e.g. S3).
-    Claude Code clones the git source or downloads the archive when users install.
-
-    This endpoint is create-only and never overwrites. If a plugin with
-    the same name already exists it returns 409 Conflict; use
-    PUT /claude-code/plugins/{plugin_name} to update an existing plugin.
-
-    Requires a proxy admin API key.
-
-    Parameters:
-        - name: Plugin name (kebab-case)
-        - source: Plugin source reference (github, url, git-subdir, or archive format)
-        - version: Semantic version (optional)
-        - description: Plugin description (optional)
-        - author: Author information (optional)
-        - homepage: Plugin homepage URL (optional)
-        - keywords: Search keywords (optional)
-        - category: Plugin category (optional)
-        - installation_preference: 'available', 'auto_install', or 'required' (optional)
-
-    Returns:
-        Registration status (action is always "created") and plugin information.
-
-    Example:
-        ```bash
-        curl -X POST http://localhost:4000/claude-code/plugins \\
-          -H "Authorization: Bearer sk-..." \\
-          -H "Content-Type: application/json" \\
-          -d '{
-            "name": "my-plugin",
-            "source": {"source": "github", "repo": "org/my-plugin"},
-            "version": "1.0.0",
-            "description": "My awesome plugin"
-          }'
-        ```
-    """
-    try:
-        _require_proxy_admin(user_api_key_dict)
-
-        if uploads is None:
-            raise _error_response(500, CommonProxyErrors.db_not_connected_error.value)
-
-        if not re.match(r"^[a-z0-9-]+$", request.name):
-            raise HTTPException(
-                status_code=400,
-                detail={"error": "Plugin name must be kebab-case (lowercase letters, numbers, hyphens)"},
-            )
-
-        _validate_plugin_source(request.source)
-        _validate_installation_preference(request)
-
-        manifest: Final[Mapping[str, object]] = _build_plugin_manifest(request.name, request)
-
-        plugin: Final = await uploads.publish(
-            PluginPublication(
-                name=request.name,
-                version=request.version,
-                description=request.description,
-                manifest=manifest,
-                created_by=user_api_key_dict.user_id,
-            )
-        )
-        if isinstance(plugin, PluginPublicationError):
-            raise _publication_error(plugin)
-
-        verbose_proxy_logger.info("Plugin %s created successfully", request.name)
-
-        return RegisterPluginResponse(
-            status="success",
-            action="created",
-            plugin=PluginResponse(
-                id=plugin.id,
-                name=plugin.name,
-                version=plugin.version,
-                description=request.description,
-                source=request.source,
-                installation_preference=request.installation_preference,
-                enabled=plugin.enabled,
-            ),
-        )
-
-    except HTTPException:
-        raise
-    except Exception as e:
-        verbose_proxy_logger.exception("Error registering plugin: %s", e)
-        raise HTTPException(
-            status_code=500,
-            detail={"error": f"Registration failed: {e}"},
-        )
+) -> RegisterPluginResponse:
+    """Register a new skill. Members submit an immutable proposal; proxy admins publish directly. Duplicate names return 409."""
+    return await _write_skill(request.name, request, None, False, uploads, submissions, user_api_key_dict)
 
 
 @router.get(
@@ -719,6 +754,8 @@ async def get_plugin(
             "homepage": manifest.get("homepage"),
             "keywords": manifest.get("keywords"),
             "category": manifest.get("category"),
+            "domain": manifest.get("domain"),
+            "namespace": manifest.get("namespace"),
             "installation_preference": get_installation_preference(manifest),
             "enabled": plugin.enabled,
             "created_at": plugin.created_at.isoformat() if plugin.created_at else None,
@@ -739,186 +776,18 @@ async def get_plugin(
 @router.put(
     "/claude-code/plugins/{plugin_name}",
     tags=["Claude Code Marketplace"],
-    dependencies=[Depends(user_api_key_auth)],
     response_model=RegisterPluginResponse,
 )
 async def update_plugin(
     plugin_name: str,
     request: UpdatePluginRequest,
     uploads: PluginUploadRepositoryDep,
+    submissions: SkillSubmissionRepositoryDep,
     user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
-):
-    """
-    Update an existing plugin in the LiteLLM marketplace.
-
-    The plugin is identified by its name in the path, which is the resource
-    identity and cannot be changed here. This is a full replace, not a merge:
-    the manifest is rebuilt from the request body, so any optional field left
-    out is reset to its default, except version which automatically increments
-    the published patch version when omitted or null.
-    Send the full desired state.
-
-    Returns 404 if no plugin with the given name exists; use
-    POST /claude-code/plugins to create a new plugin.
-
-    Requires a proxy admin API key.
-
-    Parameters:
-        - plugin_name: Name of the plugin to update (path parameter)
-        - source: Plugin source reference (github, url, git-subdir, or archive format)
-        - version: Semantic version (optional)
-        - description: Plugin description (optional)
-        - author: Author information (optional)
-        - homepage: Plugin homepage URL (optional)
-        - keywords: Search keywords (optional)
-        - category: Plugin category (optional)
-        - installation_preference: 'available', 'auto_install', or 'required' (optional)
-
-    Returns:
-        Update status (action is always "updated") and plugin information.
-
-    Example:
-        ```bash
-        curl -X PUT http://localhost:4000/claude-code/plugins/my-plugin \\
-          -H "Authorization: Bearer sk-..." \\
-          -H "Content-Type: application/json" \\
-          -d '{
-            "source": {"source": "github", "repo": "org/my-plugin"},
-            "version": "2.0.0",
-            "description": "My awesome plugin"
-          }'
-        ```
-    """
-    from prisma.errors import PrismaError
-
-    try:
-        _require_proxy_admin(user_api_key_dict)
-        if uploads is None:
-            raise _error_response(500, CommonProxyErrors.db_not_connected_error.value)
-
-        prisma_client: Final = await get_prisma_client()
-
-        repository: Final = ClaudeCodePluginRepository(prisma_client, use_writer=True)
-        existing: Final[_PluginRecord | None] = await repository.table.find_unique(where={"name": plugin_name})
-        if not existing:
-            raise _error_response(404, f"Plugin '{plugin_name}' not found")
-        if request.expected_updated_at is not None and request.expected_updated_at != existing.updated_at:
-            raise _error_response(409, "The published skill changed. Reload it before publishing an update")
-
-        current_manifest: Final = MANIFEST_FIELDS.validate_json(existing.manifest_json or "{}")
-        if request.source != current_manifest.get("source"):
-            _validate_plugin_source(request.source)
-        _validate_installation_preference(request)
-
-        manifest: Final[Mapping[str, object]] = _build_plugin_manifest(plugin_name, request)
-
-        plugin: Final = await uploads.publish(
-            PluginPublication(
-                name=plugin_name,
-                version=request.version,
-                description=request.description,
-                manifest=manifest,
-                created_by=user_api_key_dict.user_id,
-            ),
-            PluginPublicationBase(existing.id, existing.updated_at),
-        )
-        if isinstance(plugin, PluginPublicationError):
-            raise _publication_error(plugin)
-
-        verbose_proxy_logger.info("Plugin %s updated successfully", plugin_name)
-
-        return RegisterPluginResponse(
-            status="success",
-            action="updated",
-            plugin=PluginResponse(
-                id=plugin.id,
-                name=plugin.name,
-                version=plugin.version,
-                description=request.description,
-                source=request.source,
-                installation_preference=request.installation_preference,
-                enabled=plugin.enabled,
-            ),
-        )
-
-    except HTTPException:
-        raise
-    except PrismaError as e:
-        verbose_proxy_logger.exception("Error updating plugin: %s", e)
-        raise _error_response(500, f"Update failed: {e}")
-
-
-@router.get(
-    "/claude-code/plugins/{plugin_name}/versions",
-    tags=["Claude Code Marketplace"],
-    response_model=ListPluginVersionsResponse,
-)
-async def list_plugin_versions(
-    plugin_name: str,
-    uploads: PluginUploadRepositoryDep,
-    user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
-    limit: Annotated[int, Query(ge=1, le=100)] = 20,
-    offset: Annotated[int, Query(ge=0)] = 0,
-) -> ListPluginVersionsResponse:
-    """Read published metadata history. External source references are not archived content."""
-    if uploads is None:
-        raise _error_response(500, CommonProxyErrors.db_not_connected_error.value)
-    metadata: Final = await uploads.get_metadata(plugin_name)
-    if metadata is None:
-        raise _error_response(404, f"Plugin '{plugin_name}' not found")
-    if not (await resolve_skill_visibility(user_api_key_dict)).allows(metadata):
-        raise _error_response(403, f"Plugin '{plugin_name}' is not granted to this key")
-    versions: Final = await uploads.versions(metadata, limit + 1, offset)
-    return ListPluginVersionsResponse(
-        versions=tuple(
-            PluginVersionResponse(
-                id=version.id,
-                version=version.version,
-                description=version.description,
-                manifest=dict(version.manifest),
-                published_at=version.published_at,
-                published_by=version.published_by,
-                content_kind="stored_archive" if version.archive_available else "source_reference",
-                archive_path=(
-                    f"/claude-code/plugins/{plugin_name}/versions/{version.id}/archive"
-                    if version.archive_available
-                    else None
-                ),
-            )
-            for version in versions[:limit]
-        ),
-        next_offset=offset + limit if len(versions) > limit else None,
-    )
-
-
-@router.get(
-    "/claude-code/plugins/{plugin_name}/versions/{version_id}/archive",
-    tags=["Claude Code Marketplace"],
-    response_class=Response,
-)
-async def download_plugin_version(
-    plugin_name: str,
-    version_id: str,
-    uploads: PluginUploadRepositoryDep,
-    user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
-) -> Response:
-    """Download retained uploaded bytes under the current skill's visibility policy."""
-    if uploads is None:
-        raise _error_response(500, CommonProxyErrors.db_not_connected_error.value)
-    metadata: Final = await uploads.get_metadata(plugin_name)
-    if metadata is None or not (await resolve_skill_visibility(user_api_key_dict)).allows(metadata):
-        raise _error_response(404, "Skill archive not found")
-    content: Final = await uploads.version_content(metadata.id, version_id, metadata)
-    if content is None:
-        raise _error_response(404, "This version has no retained archive")
-    return Response(
-        content=content,
-        media_type="application/zip",
-        headers={
-            "Content-Disposition": f'attachment; filename="{plugin_name}.zip"',
-            "Cache-Control": "private, no-store",
-            "X-Content-Type-Options": "nosniff",
-        },
+) -> RegisterPluginResponse:
+    """Replace visible skill metadata. An omitted version requests an automatic patch bump when published."""
+    return await _write_skill(
+        plugin_name, request, None, True, uploads, submissions, user_api_key_dict, request.expected_updated_at
     )
 
 
@@ -1064,3 +933,276 @@ async def delete_plugin(
             status_code=500,
             detail={"error": str(e)},
         )
+
+
+def _submission_response(submission: SkillSubmission) -> SkillSubmissionResponse:
+    return SkillSubmissionResponse(
+        id=submission.id,
+        plugin_name=submission.plugin_name,
+        operation=submission.operation,
+        status=submission.status,
+        proposal=submission.proposal,
+        has_archive=submission.has_archive,
+        submitted_by=submission.submitted_by,
+        created_at=submission.created_at.isoformat(),
+        base_plugin_id=submission.base_plugin_id,
+        base_updated_at=None if submission.base_updated_at is None else submission.base_updated_at.isoformat(),
+        reviewed_by=submission.reviewed_by,
+        reviewed_at=None if submission.reviewed_at is None else submission.reviewed_at.isoformat(),
+        rejection_reason=submission.rejection_reason,
+    )
+
+
+def _submission_owner(caller: UserAPIKeyAuth) -> str | None:
+    if is_proxy_admin(caller) or caller.user_role == LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY:
+        return None
+    if not caller.user_id or caller.user_id == DB_UNAVAILABLE_FALLBACK_USER_ID:
+        raise _error_response(403, "Reading submissions requires a user identity.")
+    return caller.user_id
+
+
+def _snapshot_response(plugin: PluginSnapshot) -> PluginListItem:
+    manifest: Final = {
+        key: value
+        for key, value in plugin.manifest.items()
+        if key not in ("installation_preference", "installationPreference")
+    }
+    spec: Final = RegisterPluginRequest.model_validate(
+        {
+            **manifest,
+            "name": plugin.name,
+            "version": plugin.version,
+            "installation_preference": get_installation_preference(plugin.manifest),
+        }
+    )
+    return PluginListItem(
+        id=plugin.id,
+        name=plugin.name,
+        version=plugin.version,
+        description=plugin.description,
+        source=spec.source,
+        author=spec.author,
+        homepage=spec.homepage,
+        keywords=spec.keywords,
+        category=spec.category,
+        domain=spec.domain,
+        namespace=spec.namespace,
+        installation_preference=spec.installation_preference,
+        enabled=plugin.enabled,
+        created_at=None if plugin.created_at is None else plugin.created_at.isoformat(),
+        updated_at=None if plugin.updated_at is None else plugin.updated_at.isoformat(),
+    )
+
+
+@router.get(
+    "/claude-code/skill-submissions",
+    tags=["Claude Code Marketplace"],
+    response_model=ListSkillSubmissionsResponse,
+)
+async def list_skill_submissions(
+    submissions: SkillSubmissionRepositoryDep,
+    user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
+    status: SubmissionStatus | None = None,
+) -> ListSkillSubmissionsResponse:
+    """List the caller's immutable skill proposals. Proxy admins and admin viewers can read all proposals."""
+    owner: Final = _submission_owner(user_api_key_dict)
+    if submissions is None:
+        raise _error_response(500, CommonProxyErrors.db_not_connected_error.value)
+    rows: Final = await submissions.list(owner, status)
+    return ListSkillSubmissionsResponse(submissions=tuple(_submission_response(row) for row in rows), count=len(rows))
+
+
+@router.get(
+    "/claude-code/skill-submissions/{submission_id}",
+    tags=["Claude Code Marketplace"],
+    response_model=SkillSubmissionDetail,
+)
+async def get_skill_submission(
+    submission_id: str,
+    submissions: SkillSubmissionRepositoryDep,
+    uploads: PluginUploadRepositoryDep,
+    user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
+) -> SkillSubmissionDetail:
+    """Read an owned proposal and the visible published skill. Admins and admin viewers have review read access."""
+    owner: Final = _submission_owner(user_api_key_dict)
+    if submissions is None or uploads is None:
+        raise _error_response(500, CommonProxyErrors.db_not_connected_error.value)
+    submission: Final = await submissions.get(submission_id, owner)
+    if submission is None:
+        raise _error_response(404, "Skill submission not found")
+    current: Final = await uploads.get_plugin(submission.plugin_name)
+    visible: Final = current is not None and (
+        owner is None or (await resolve_skill_visibility(user_api_key_dict)).allows(current)
+    )
+    return SkillSubmissionDetail(
+        submission=_submission_response(submission),
+        current_plugin=_snapshot_response(current) if current is not None and visible else None,
+    )
+
+
+@router.get(
+    "/claude-code/skill-submissions/{submission_id}/archive",
+    tags=["Claude Code Marketplace"],
+    response_class=Response,
+    responses={200: {"content": {"application/zip": {"schema": {"type": "string", "format": "binary"}}}}},
+)
+async def download_skill_submission_archive(
+    submission_id: str,
+    submissions: SkillSubmissionRepositoryDep,
+    user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
+) -> Response:
+    """Download a proposal's sanitized ZIP privately. Only its owner, proxy admins, and admin viewers may read it."""
+    owner: Final = _submission_owner(user_api_key_dict)
+    if submissions is None:
+        raise _error_response(500, CommonProxyErrors.db_not_connected_error.value)
+    content: Final = await submissions.get_archive(submission_id, owner)
+    if content is None:
+        raise _error_response(404, "Skill submission archive not found")
+    return Response(
+        content=content,
+        media_type="application/zip",
+        headers={
+            "Content-Disposition": 'attachment; filename="skill-submission.zip"',
+            "Cache-Control": "private, no-store",
+            "X-Content-Type-Options": "nosniff",
+        },
+    )
+
+
+async def _review_skill_submission(
+    submission_id: str,
+    submissions: SkillSubmissionRepositoryDep,
+    caller: UserAPIKeyAuth,
+    approve: bool,
+    reason: str | None,
+) -> ReviewSkillSubmissionResponse:
+    _require_proxy_admin(caller)
+    if submissions is None:
+        raise _error_response(500, CommonProxyErrors.db_not_connected_error.value)
+    result: Final = await submissions.review(submission_id, caller.user_id or "proxy-admin", approve, reason)
+    match result:
+        case SubmissionMissing():
+            raise _error_response(404, "Skill submission not found")
+        case SubmissionConflict(message=message):
+            raise _error_response(409, message)
+        case PluginPublicationError(kind="invalid_version") as publication_error:
+            raise _publication_error(publication_error)
+        case PluginPublicationError(message=message):
+            raise _error_response(409, message)
+        case SubmissionReviewed(submission=submission, plugin=plugin):
+            return ReviewSkillSubmissionResponse(
+                action="approved" if approve else "rejected",
+                submission=_submission_response(submission),
+                plugin=None if plugin is None else _plugin_response(plugin, submission.proposal),
+            )
+        case _:
+            assert_never(result)
+
+
+@router.put(
+    "/claude-code/skill-submissions/{submission_id}/approve",
+    tags=["Claude Code Marketplace"],
+    response_model=ReviewSkillSubmissionResponse,
+)
+async def approve_skill_submission(
+    submission_id: str,
+    submissions: SkillSubmissionRepositoryDep,
+    user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
+) -> ReviewSkillSubmissionResponse:
+    """Publish a pending proposal and record approval atomically. Proxy admins only; stale or reviewed proposals return 409."""
+    return await _review_skill_submission(submission_id, submissions, user_api_key_dict, True, None)
+
+
+@router.put(
+    "/claude-code/skill-submissions/{submission_id}/reject",
+    tags=["Claude Code Marketplace"],
+    response_model=ReviewSkillSubmissionResponse,
+)
+async def reject_skill_submission(
+    submission_id: str,
+    submissions: SkillSubmissionRepositoryDep,
+    user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
+    request: RejectSkillSubmissionRequest | None = None,
+) -> ReviewSkillSubmissionResponse:
+    """Reject a pending proposal without changing the catalog. Proxy admins only; optionally record a reason."""
+    return await _review_skill_submission(
+        submission_id,
+        submissions,
+        user_api_key_dict,
+        False,
+        None if request is None else request.reason,
+    )
+
+
+@router.get(
+    "/claude-code/plugins/{plugin_name}/versions",
+    tags=["Claude Code Marketplace"],
+    response_model=ListPluginVersionsResponse,
+)
+async def list_plugin_versions(
+    plugin_name: str,
+    uploads: PluginUploadRepositoryDep,
+    user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
+    limit: Annotated[int, Query(ge=1, le=100)] = 20,
+    offset: Annotated[int, Query(ge=0)] = 0,
+) -> ListPluginVersionsResponse:
+    """Read published metadata history. External source references are not archived content."""
+    if uploads is None:
+        raise _error_response(500, CommonProxyErrors.db_not_connected_error.value)
+    metadata: Final = await uploads.get_metadata(plugin_name)
+    if metadata is None:
+        raise _error_response(404, f"Plugin '{plugin_name}' not found")
+    if not (await resolve_skill_visibility(user_api_key_dict)).allows(metadata):
+        raise _error_response(403, f"Plugin '{plugin_name}' is not granted to this key")
+    versions: Final = await uploads.versions(metadata, limit + 1, offset)
+    return ListPluginVersionsResponse(
+        versions=tuple(
+            PluginVersionResponse(
+                id=version.id,
+                version=version.version,
+                description=version.description,
+                manifest=dict(version.manifest),
+                published_at=version.published_at,
+                published_by=version.published_by,
+                content_kind="stored_archive" if version.archive_available else "source_reference",
+                archive_path=(
+                    f"/claude-code/plugins/{plugin_name}/versions/{version.id}/archive"
+                    if version.archive_available
+                    else None
+                ),
+            )
+            for version in versions[:limit]
+        ),
+        next_offset=offset + limit if len(versions) > limit else None,
+    )
+
+
+@router.get(
+    "/claude-code/plugins/{plugin_name}/versions/{version_id}/archive",
+    tags=["Claude Code Marketplace"],
+    response_class=Response,
+)
+async def download_plugin_version(
+    plugin_name: str,
+    version_id: str,
+    uploads: PluginUploadRepositoryDep,
+    user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
+) -> Response:
+    """Download retained uploaded bytes under the current skill's visibility policy."""
+    if uploads is None:
+        raise _error_response(500, CommonProxyErrors.db_not_connected_error.value)
+    metadata: Final = await uploads.get_metadata(plugin_name)
+    if metadata is None or not (await resolve_skill_visibility(user_api_key_dict)).allows(metadata):
+        raise _error_response(404, "Skill archive not found")
+    content: Final = await uploads.version_content(metadata.id, version_id, metadata)
+    if content is None:
+        raise _error_response(404, "This version has no retained archive")
+    return Response(
+        content=content,
+        media_type="application/zip",
+        headers={
+            "Content-Disposition": f'attachment; filename="{plugin_name}.zip"',
+            "Cache-Control": "private, no-store",
+            "X-Content-Type-Options": "nosniff",
+        },
+    )

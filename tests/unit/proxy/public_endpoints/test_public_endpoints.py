@@ -1830,6 +1830,7 @@ def test_public_skill_hub_echoes_registered_installation_preference(preference: 
         asyncio.run(
             register_plugin(
                 uploads=PluginUploadRepository(prisma),
+                submissions=None,
                 request=RegisterPluginRequest(
                     name="security-review",
                     source={

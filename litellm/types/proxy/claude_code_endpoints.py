@@ -101,6 +101,11 @@ class UploadPluginRequest(PluginMetadata):
     name: str = Field(..., pattern=r"^[a-z0-9-]+$", description="Skill name (kebab-case)")
 
 
+class UpdateUploadedPluginRequest(PluginMetadata):
+    version: str | None = Field(None, description="Explicit higher SemVer, or omit/null for an automatic patch bump")
+    expected_updated_at: datetime | None = Field(None, exclude=True, description="Revision loaded by the editor")
+
+
 class UpdatePluginRequest(PluginSpec):
     """
     Request body for replacing an existing plugin.
@@ -140,6 +145,8 @@ class ListPluginVersionsResponse(LiteLLMBaseModel):
 class PluginResponse(LiteLLMBaseModel):
     """Plugin information in API responses."""
 
+    model_config = ConfigDict(frozen=True)
+
     id: str = Field(..., description="Plugin unique ID")
     name: str = Field(..., description="Plugin name")
     version: str | None = Field(None, description="Plugin version")
@@ -152,13 +159,18 @@ class PluginResponse(LiteLLMBaseModel):
 class RegisterPluginResponse(LiteLLMBaseModel):
     """Response from plugin registration."""
 
+    model_config = ConfigDict(frozen=True)
+
     status: str = Field(..., description="Operation status")
-    action: str = Field(..., description="Action taken (created/updated)")
+    action: str = Field(..., description="Action taken (created/updated/submitted)")
     plugin: PluginResponse = Field(..., description="Plugin information")
+    submission_id: str | None = Field(None, description="Pending review submission ID, absent for direct publication")
 
 
 class PluginListItem(LiteLLMBaseModel):
     """Plugin item in list responses."""
+
+    model_config = ConfigDict(frozen=True)
 
     id: str
     name: str
@@ -209,3 +221,50 @@ class MarketplaceResponse(LiteLLMBaseModel):
     name: str = Field(..., description="Marketplace identifier")
     owner: PluginOwner = Field(..., description="Marketplace owner")
     plugins: list[MarketplacePluginEntry] = Field(default_factory=list, description="Available plugins")
+
+
+class SkillSubmissionResponse(LiteLLMBaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    id: str
+    plugin_name: str
+    operation: Literal["create", "update"]
+    status: Literal["pending_review", "approved", "rejected"]
+    proposal: RegisterPluginRequest
+    has_archive: bool
+    submitted_by: str
+    created_at: str
+    base_plugin_id: str | None
+    base_updated_at: str | None
+    reviewed_by: str | None
+    reviewed_at: str | None
+    rejection_reason: str | None
+
+
+class ListSkillSubmissionsResponse(LiteLLMBaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    submissions: tuple[SkillSubmissionResponse, ...]
+    count: int
+
+
+class SkillSubmissionDetail(LiteLLMBaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    submission: SkillSubmissionResponse
+    current_plugin: PluginListItem | None
+
+
+class RejectSkillSubmissionRequest(LiteLLMBaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    reason: str | None = Field(None, max_length=2000, description="Optional explanation for the submitter")
+
+
+class ReviewSkillSubmissionResponse(LiteLLMBaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    status: Literal["success"] = "success"
+    action: Literal["approved", "rejected"]
+    submission: SkillSubmissionResponse
+    plugin: PluginResponse | None

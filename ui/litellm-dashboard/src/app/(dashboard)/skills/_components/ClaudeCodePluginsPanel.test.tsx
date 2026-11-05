@@ -1,4 +1,5 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { screen, waitFor } from "@testing-library/react";
+import { renderWithProviders as render, testQueryClient } from "@/../tests/test-utils";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -39,6 +40,7 @@ vi.mock("./PluginTable", () => ({
 }));
 
 vi.mock("./add_plugin_form", () => ({ __esModule: true, default: () => null }));
+vi.mock("./SkillSubmissions", () => ({ __esModule: true, default: () => null }));
 vi.mock("@/components/claude_code_plugins/skill_detail", () => ({ __esModule: true, default: () => null }));
 
 const mockGetClaudeCodePluginsList = vi.mocked(getClaudeCodePluginsList);
@@ -54,6 +56,7 @@ const skill: Plugin = {
 describe("ClaudeCodePluginsPanel loading state", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    testQueryClient.clear();
   });
 
   it("should resolve the loading state when accessToken is null instead of showing the skeleton forever", async () => {
@@ -81,6 +84,7 @@ describe("ClaudeCodePluginsPanel loading state", () => {
 describe("ClaudeCodePluginsPanel delete confirmation", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    testQueryClient.clear();
     mockGetClaudeCodePluginsList.mockResolvedValue({ plugins: [skill], count: 1 });
   });
 

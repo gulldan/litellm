@@ -1,6 +1,8 @@
-import React, { useState, useEffect } from "react";
+import React, { useState } from "react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Trans, useTranslation } from "react-i18next";
 import { Button } from "@/components/ui/button";
+import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import {
   AlertDialog,
   AlertDialogCancel,
@@ -14,62 +16,67 @@ import { getClaudeCodePluginsList, deleteClaudeCodePlugin } from "@/components/n
 import AddPluginForm from "./add_plugin_form";
 import PluginTable from "./PluginTable";
 import SkillDetail from "@/components/claude_code_plugins/skill_detail";
-import { isAdminRole } from "@/utils/roles";
+import { isProxyAdminRole, isProxyAdminTierRole, isViewOnlySessionRole } from "@/utils/roles";
 import { toast } from "@/lib/toast";
-import { Plugin, ListPluginsResponse } from "@/components/claude_code_plugins/types";
+import { Plugin } from "@/components/claude_code_plugins/types";
+import { useUrlTab } from "@/hooks/useUrlTab";
+import SkillSubmissions from "./SkillSubmissions";
 
 interface ClaudeCodePluginsPanelProps {
   accessToken: string | null;
   userRole?: string;
+  isViewOnly?: boolean;
 }
 
-const ClaudeCodePluginsPanel: React.FC<ClaudeCodePluginsPanelProps> = ({ accessToken, userRole }) => {
+const SKILLS_TABS = ["skills", "submissions"] as const;
+
+const SkillsPanelContent: React.FC<ClaudeCodePluginsPanelProps> = ({
+  accessToken,
+  userRole = "",
+  isViewOnly = false,
+}) => {
   const { t } = useTranslation();
-  const [pluginsList, setPluginsList] = useState<Plugin[]>([]);
+  const queryClient = useQueryClient();
+  const [tab, setTab] = useUrlTab(SKILLS_TABS, "skills");
   const [isAddModalVisible, setIsAddModalVisible] = useState(false);
-  const [isLoading, setIsLoading] = useState(true);
+  const [editingSkill, setEditingSkill] = useState<Plugin>();
   const [isDeleting, setIsDeleting] = useState(false);
   const [pluginToDelete, setPluginToDelete] = useState<{
     name: string;
     displayName: string;
   } | null>(null);
-  const [selectedSkill, setSelectedSkill] = useState<Plugin | null>(null);
-
-  const isAdmin = userRole ? isAdminRole(userRole) : false;
-
-  const fetchPlugins = async () => {
-    if (!accessToken) {
-      setIsLoading(false);
-      return;
-    }
-
-    setIsLoading(true);
-    try {
-      const response: ListPluginsResponse = await getClaudeCodePluginsList(accessToken, false);
-      setPluginsList(response.plugins);
-    } catch (error) {
-      console.error("Error fetching skills:", error);
-    } finally {
-      setIsLoading(false);
-    }
+  const [selectedSkillId, setSelectedSkillId] = useState<string | null>(null);
+  const readOnly =
+    isViewOnly || isViewOnlySessionRole(userRole) || ["Admin Viewer", "Internal Viewer"].includes(userRole);
+  const canWrite = Boolean(accessToken && userRole) && !readOnly;
+  const isAdmin = isProxyAdminRole(userRole) && canWrite;
+  const adminView = isProxyAdminTierRole(userRole);
+  const queryScope = ["skills", accessToken, userRole, readOnly] as const;
+  const showForm = Boolean(isAddModalVisible || editingSkill) && canWrite;
+  const plugins = useQuery({
+    queryKey: [...queryScope, "published"],
+    queryFn: () => getClaudeCodePluginsList(accessToken!, false),
+    enabled: Boolean(accessToken),
+  });
+  const pluginsList = plugins.data?.plugins ?? [];
+  const selectedSkill = pluginsList.find((plugin) => plugin.id === selectedSkillId);
+  const refreshSkills = async () => {
+    setSelectedSkillId(null);
+    await queryClient.invalidateQueries({ queryKey: queryScope, refetchType: "all" });
   };
-
-  useEffect(() => {
-    fetchPlugins();
-  }, [accessToken]);
 
   const handleDeleteClick = (pluginName: string, displayName: string) => {
     setPluginToDelete({ name: pluginName, displayName });
   };
 
   const handleDeleteConfirm = async () => {
-    if (!pluginToDelete || !accessToken) return;
+    if (!pluginToDelete || !accessToken || !isAdmin) return;
 
     setIsDeleting(true);
     try {
       await deleteClaudeCodePlugin(accessToken, pluginToDelete.name);
       toast.success(t("skills.panel.toasts.deleted", { name: pluginToDelete.displayName }));
-      fetchPlugins();
+      await refreshSkills();
     } catch (error) {
       console.error("Error deleting skill:", error);
       toast.error(t("skills.panel.toasts.deleteFailed"));
@@ -84,10 +91,11 @@ const ClaudeCodePluginsPanel: React.FC<ClaudeCodePluginsPanelProps> = ({ accessT
       {selectedSkill ? (
         <SkillDetail
           skill={selectedSkill}
-          onBack={() => setSelectedSkill(null)}
+          onBack={() => setSelectedSkillId(null)}
           isAdmin={isAdmin}
           accessToken={accessToken}
-          onPublishClick={fetchPlugins}
+          onPublishClick={refreshSkills}
+          onEditClick={canWrite ? () => setEditingSkill(selectedSkill) : undefined}
         />
       ) : (
         <>
@@ -102,31 +110,65 @@ const ClaudeCodePluginsPanel: React.FC<ClaudeCodePluginsPanelProps> = ({ accessT
               />
             </p>
             <div className="mt-2 flex gap-2">
-              <Button onClick={() => setIsAddModalVisible(true)} disabled={!accessToken || !isAdmin}>
+              <Button onClick={() => setIsAddModalVisible(true)} disabled={!canWrite}>
                 {t("skills.panel.addButton")}
               </Button>
             </div>
           </div>
 
-          <PluginTable
-            pluginsList={pluginsList}
-            isLoading={isLoading}
-            onDeleteClick={handleDeleteClick}
-            isAdmin={isAdmin}
-            onPluginClick={(id) => {
-              const skill = pluginsList.find((p) => p.id === id);
-              if (skill) setSelectedSkill(skill);
-            }}
-          />
+          <Tabs value={tab} onValueChange={(value) => setTab(value === "submissions" ? "submissions" : "skills")}>
+            <TabsList variant="line">
+              <TabsTrigger value="skills">{t("skills.panel.tabs.skills")}</TabsTrigger>
+              <TabsTrigger value="submissions">
+                {t(adminView ? "skills.panel.tabs.submissions" : "skills.panel.tabs.mySubmissions")}
+              </TabsTrigger>
+            </TabsList>
+            <TabsContent value="skills">
+              {plugins.isError && (
+                <div role="alert" className="my-3 text-sm text-destructive">
+                  {t("skills.panel.loadFailed")}
+                  <Button variant="link" onClick={() => void plugins.refetch()}>
+                    {t("skills.submissions.retry")}
+                  </Button>
+                </div>
+              )}
+              <PluginTable
+                pluginsList={pluginsList}
+                isLoading={plugins.isLoading}
+                onDeleteClick={handleDeleteClick}
+                isAdmin={isAdmin}
+                onPluginClick={setSelectedSkillId}
+              />
+            </TabsContent>
+            <TabsContent value="submissions">
+              {accessToken && (
+                <SkillSubmissions
+                  accessToken={accessToken}
+                  queryScope={queryScope}
+                  canReview={isAdmin}
+                  adminView={adminView}
+                  onChanged={refreshSkills}
+                />
+              )}
+            </TabsContent>
+          </Tabs>
         </>
       )}
 
-      <AddPluginForm
-        visible={isAddModalVisible}
-        onClose={() => setIsAddModalVisible(false)}
-        accessToken={accessToken}
-        onSuccess={fetchPlugins}
-      />
+      {showForm && (
+        <AddPluginForm
+          key={editingSkill ? editingSkill.id : "new"}
+          visible
+          plugin={editingSkill}
+          requiresApproval={!isAdmin}
+          onClose={() => {
+            setIsAddModalVisible(false);
+            setEditingSkill(undefined);
+          }}
+          accessToken={accessToken}
+          onSuccess={() => void refreshSkills()}
+        />
+      )}
 
       {pluginToDelete && (
         <AlertDialog
@@ -158,5 +200,9 @@ const ClaudeCodePluginsPanel: React.FC<ClaudeCodePluginsPanelProps> = ({ accessT
     </div>
   );
 };
+
+const ClaudeCodePluginsPanel: React.FC<ClaudeCodePluginsPanelProps> = (props) => (
+  <SkillsPanelContent key={`${props.accessToken}:${props.userRole}:${props.isViewOnly}`} {...props} />
+);
 
 export default ClaudeCodePluginsPanel;

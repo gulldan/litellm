@@ -19,12 +19,13 @@ export type Plugin = components["schemas"]["PluginListItem"];
 export type PluginListItem = Plugin;
 export type ListPluginsResponse = components["schemas"]["ListPluginsResponse"];
 
-// Request envelope synced from the OpenAPI spec, with `source` narrowed to our PluginSource
-// union and `version` kept optional (the backend supplies its default).
-export type SkillRegisterRequest = Omit<components["schemas"]["RegisterPluginRequest"], "source" | "version"> & {
-  source: PluginSource;
-  version?: string;
+export type SkillRegisterRequest = Omit<components["schemas"]["RegisterPluginRequest"], "version"> & {
+  version?: components["schemas"]["RegisterPluginRequest"]["version"];
 };
+
+export type SkillUpdateRequest = components["schemas"]["UpdatePluginRequest"];
+export type SkillFormMetadata = Omit<SkillRegisterRequest, "source"> & Omit<SkillUpdateRequest, "source">;
+export type SkillSubmission = components["schemas"]["SkillSubmissionResponse"];
 
 // Public marketplace types
 export type MarketplacePluginEntry = Pick<Plugin, "name" | "source"> &

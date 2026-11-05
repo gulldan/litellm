@@ -5,7 +5,7 @@ import { useTranslation } from "react-i18next";
 import i18n from "@/i18n/i18n";
 import { z } from "zod";
 import { toast } from "@/lib/toast";
-import { registerClaudeCodePlugin, uploadClaudeCodeSkill } from "@/components/networking";
+import { registerClaudeCodePlugin, updateClaudeCodePlugin, uploadClaudeCodeSkill } from "@/components/networking";
 import { FieldGroup } from "@/components/ui/field";
 import { FormField } from "@/components/shared/form/FormField";
 import { Button } from "@/components/ui/button";
@@ -27,13 +27,13 @@ import {
   validatePluginName,
   isValidSemanticVersion,
   isValidEmail,
-  parseKeywords,
   parseSkillSource,
   isValidSubPath,
   isValidSha256,
   SkillSourcePreview,
 } from "@/components/claude_code_plugins/helpers";
-import { PluginAuthor, PluginSource, SkillRegisterRequest } from "@/components/claude_code_plugins/types";
+import { Plugin, PluginSource } from "@/components/claude_code_plugins/types";
+import { buildSkillMetadata, buildSkillSource, skillFormValues } from "@/components/claude_code_plugins/skillForm";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 
 interface AddPluginFormProps {
@@ -41,6 +41,8 @@ interface AddPluginFormProps {
   onClose: () => void;
   accessToken: string | null;
   onSuccess: () => void;
+  plugin?: Plugin;
+  requiresApproval?: boolean;
 }
 
 const MAX_SKILL_UPLOAD_BYTES = 10 * 1024 * 1024;
@@ -93,53 +95,8 @@ const addPluginSchema = z.object(addPluginShape).superRefine((values, context) =
 
 type AddPluginFormValues = z.infer<typeof addPluginSchema>;
 
-const EMPTY_VALUES: AddPluginFormValues = {
-  sourceType: "url",
-  archiveFile: null,
-  skillUrl: "",
-  subPath: "",
-  sha256: "",
-  name: "",
-  domain: "",
-  namespace: "",
-  description: "",
-  category: null,
-  keywords: "",
-  version: "",
-  authorName: "",
-  authorEmail: "",
-};
-
-const buildAuthor = (values: AddPluginFormValues): PluginAuthor | undefined => {
-  const name = values.authorName.trim();
-  const email = values.authorEmail.trim();
-  if (!name) {
-    return undefined;
-  }
-  return email ? { name, email } : { name };
-};
-
 const archiveUrlOf = (preview: SkillSourcePreview | null): string | undefined =>
   preview?.parsed.source === "archive" ? preview.parsed.url : undefined;
-
-const withArchiveDigest = (source: PluginSource, sha256: string): PluginSource => {
-  const digest = sha256.trim();
-  return source.source === "archive" && digest ? { ...source, sha256: digest.toLowerCase() } : source;
-};
-
-const buildSkillMetadata = (values: AddPluginFormValues): Omit<SkillRegisterRequest, "source"> => {
-  const author = buildAuthor(values);
-  return {
-    name: values.name.trim(),
-    ...(values.version ? { version: values.version.trim() } : {}),
-    ...(values.description ? { description: values.description.trim() } : {}),
-    ...(author ? { author } : {}),
-    ...(values.category ? { category: values.category } : {}),
-    ...(values.keywords ? { keywords: parseKeywords(values.keywords) } : {}),
-    ...(values.domain ? { domain: values.domain.trim() } : {}),
-    ...(values.namespace ? { namespace: values.namespace.trim() } : {}),
-  };
-};
 
 const PREDEFINED_CATEGORIES = [
   "Development",
@@ -172,14 +129,32 @@ const labelWithHint = (label: string, hint: string): React.ReactNode => (
   </>
 );
 
-const AddPluginForm: React.FC<AddPluginFormProps> = ({ visible, onClose, accessToken, onSuccess }) => {
+const AddPluginForm: React.FC<AddPluginFormProps> = ({
+  visible,
+  onClose,
+  accessToken,
+  onSuccess,
+  plugin,
+  requiresApproval = false,
+}) => {
   const { t } = useTranslation();
-  const form = useZodForm(addPluginSchema, { defaultValues: EMPTY_VALUES });
+  const initialValues = skillFormValues(plugin);
+  const initialSubPathLock =
+    plugin?.source.source === "archive"
+      ? "archive"
+      : subPathLockFor(parseSkillSource(initialValues.skillUrl)?.parsed.source);
+  const form = useZodForm(addPluginSchema, { defaultValues: initialValues });
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const [urlPreview, setUrlPreview] = useState<SkillSourcePreview | null>(null);
-  const [subPathLock, setSubPathLock] = useState<SubPathLock | null>(null);
+  const [urlPreview, setUrlPreview] = useState<SkillSourcePreview | null>(() =>
+    parseSkillSource(initialValues.skillUrl, initialValues.subPath),
+  );
+  const [subPathLock, setSubPathLock] = useState<SubPathLock | null>(initialSubPathLock);
   const [archiveInputKey, setArchiveInputKey] = useState(0);
   const isUpload = form.watch("sourceType") === "upload";
+  const unchangedArchive = plugin?.source.source === "archive" && form.watch("skillUrl") === initialValues.skillUrl;
+  const isArchiveSource = urlPreview?.parsed.source === "archive" || unchangedArchive;
+  const directSubmitLabel = plugin ? "skills.addForm.save" : "skills.addForm.submit";
+  const submitLabel = requiresApproval ? "skills.addForm.submitReview" : directSubmitLabel;
 
   const clearArchive = () => {
     form.setValue("archiveFile", null);
@@ -188,10 +163,10 @@ const AddPluginForm: React.FC<AddPluginFormProps> = ({ visible, onClose, accessT
   };
 
   const resetDraft = () => {
-    form.reset(EMPTY_VALUES);
+    form.reset(initialValues);
     setArchiveInputKey((key) => key + 1);
-    setUrlPreview(null);
-    setSubPathLock(null);
+    setUrlPreview(parseSkillSource(initialValues.skillUrl, initialValues.subPath));
+    setSubPathLock(initialSubPathLock);
   };
 
   const handleSourceChange = (value: unknown) => {
@@ -232,13 +207,28 @@ const AddPluginForm: React.FC<AddPluginFormProps> = ({ visible, onClose, accessT
     }
   };
 
+  const writeSkill = (token: string, values: AddPluginFormValues, source: Plugin["source"] | null) => {
+    const metadata = buildSkillMetadata(values, plugin);
+    if (values.sourceType === "upload" && values.archiveFile) {
+      if (plugin) return uploadClaudeCodeSkill(token, values.archiveFile, metadata, plugin.name);
+      return uploadClaudeCodeSkill(token, values.archiveFile, metadata);
+    }
+    if (!source) return null;
+    if (plugin) {
+      const { name, ...updateMetadata } = metadata;
+      return updateClaudeCodePlugin(token, plugin.name, { ...updateMetadata, source });
+    }
+    return registerClaudeCodePlugin(token, { ...metadata, source });
+  };
+
   const handleSubmit = async (values: AddPluginFormValues) => {
     if (!accessToken) {
       toast.error(t("skills.addForm.toasts.noToken"));
       return;
     }
 
-    if (values.sourceType === "url" && !urlPreview) {
+    const source = buildSkillSource(values, plugin);
+    if (values.sourceType === "url" && !source) {
       toast.error(t("skills.addForm.toasts.invalidUrl"));
       return;
     }
@@ -260,17 +250,10 @@ const AddPluginForm: React.FC<AddPluginFormProps> = ({ visible, onClose, accessT
 
     setIsSubmitting(true);
     try {
-      const metadata = buildSkillMetadata(values);
-      if (values.sourceType === "upload") {
-        if (!values.archiveFile) return;
-        await uploadClaudeCodeSkill(accessToken, values.archiveFile, metadata);
-      } else if (urlPreview) {
-        await registerClaudeCodePlugin(accessToken, {
-          ...metadata,
-          source: withArchiveDigest(urlPreview.parsed, values.sha256),
-        });
-      }
-      toast.success(t("skills.addForm.toasts.registered"));
+      const response = await writeSkill(accessToken, values, source);
+      if (!response) return;
+      const publishedMessage = plugin ? "skills.addForm.toasts.updated" : "skills.addForm.toasts.registered";
+      toast.success(t(response.status === "pending_review" ? "skills.addForm.toasts.submitted" : publishedMessage));
       resetDraft();
       onSuccess();
       onClose();
@@ -292,8 +275,9 @@ const AddPluginForm: React.FC<AddPluginFormProps> = ({ visible, onClose, accessT
     <Dialog open={visible} onOpenChange={(open) => !open && handleCancel()}>
       <DialogContent className="top-8 max-h-[calc(100dvh-4rem)] translate-y-0 overflow-y-auto sm:max-w-[700px]">
         <DialogHeader>
-          <DialogTitle>{t("skills.addForm.title")}</DialogTitle>
+          <DialogTitle>{t(plugin ? "skills.addForm.editTitle" : "skills.addForm.title")}</DialogTitle>
         </DialogHeader>
+        {requiresApproval && <p className="text-sm text-muted-foreground">{t("skills.addForm.approvalNotice")}</p>}
         <TooltipProvider>
           <form onSubmit={form.handleSubmit(handleSubmit)} noValidate className="mt-4">
             <FieldGroup>
@@ -392,7 +376,7 @@ const AddPluginForm: React.FC<AddPluginFormProps> = ({ visible, onClose, accessT
                     )}
                   </FormField>
 
-                  {urlPreview?.parsed.source === "archive" && (
+                  {isArchiveSource && (
                     <FormField
                       control={form.control}
                       name="sha256"
@@ -422,7 +406,15 @@ const AddPluginForm: React.FC<AddPluginFormProps> = ({ visible, onClose, accessT
                 name="name"
                 label={labelWithHint(t("skills.addForm.labels.name"), t("skills.addForm.hints.name"))}
               >
-                {({ ref, ...field }) => <Input {...field} ref={ref} placeholder="my-skill" className="rounded-lg" />}
+                {({ ref, ...field }) => (
+                  <Input
+                    {...field}
+                    ref={ref}
+                    placeholder="my-skill"
+                    className="rounded-lg"
+                    disabled={Boolean(plugin)}
+                  />
+                )}
               </FormField>
 
               <div className="flex gap-4">
@@ -515,9 +507,24 @@ const AddPluginForm: React.FC<AddPluginFormProps> = ({ visible, onClose, accessT
               <FormField
                 control={form.control}
                 name="version"
-                label={labelWithHint(t("skills.addForm.labels.version"), t("skills.addForm.hints.version"))}
+                label={labelWithHint(
+                  t(plugin ? "skills.addForm.versionOverride" : "skills.addForm.labels.version"),
+                  t(plugin ? "skills.addForm.versionOverrideHint" : "skills.addForm.hints.version"),
+                )}
+                description={
+                  plugin
+                    ? t("skills.addForm.versionContext", { version: plugin.version ?? t("skills.submissions.notSet") })
+                    : undefined
+                }
               >
-                {({ ref, ...field }) => <Input {...field} ref={ref} placeholder="1.0.0" className="rounded-lg" />}
+                {({ ref, ...field }) => (
+                  <Input
+                    {...field}
+                    ref={ref}
+                    placeholder={plugin ? t("skills.addForm.automaticVersion") : "1.0.0"}
+                    className="rounded-lg"
+                  />
+                )}
               </FormField>
 
               <FormField
@@ -552,7 +559,7 @@ const AddPluginForm: React.FC<AddPluginFormProps> = ({ visible, onClose, accessT
               </Button>
               <Button type="submit" disabled={isSubmitting} aria-busy={isSubmitting}>
                 {isSubmitting && <UiLoadingSpinner className="size-4" />}
-                {isSubmitting ? t("skills.addForm.adding") : t("skills.addForm.submit")}
+                {t(isSubmitting ? "skills.addForm.adding" : submitLabel)}
               </Button>
             </div>
           </form>
