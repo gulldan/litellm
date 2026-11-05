@@ -9,6 +9,7 @@ import io
 import json
 import zipfile
 from collections.abc import AsyncIterator, Mapping
+from datetime import datetime, timezone
 from types import MappingProxyType
 from typing import Final, TypeAlias
 from unittest.mock import AsyncMock, MagicMock, call
@@ -1213,6 +1214,7 @@ async def upload_storage(monkeypatch: pytest.MonkeyPatch) -> AsyncIterator[_Uplo
     prisma.writer_db = MagicMock()
     plugins: Final = prisma.writer_db.litellm_claudecodeplugintable
     archives: Final = prisma.writer_db.litellm_claudecodepluginupload
+    prisma.writer_db.litellm_claudecodeplugindownload.create = AsyncMock(return_value=None)
     plugins.create = AsyncMock(return_value=prisma_models.LiteLLM_ClaudeCodePluginTable(
         id="uploaded-id", name=_UPLOAD_NAME, enabled=True,
     ))
@@ -1327,9 +1329,13 @@ async def test_archive_reads_only_authorized_current_bytes(
     assert (response.content == b"stored archive") is (status == 200)
     plugins.find_unique.assert_awaited_once_with(where={"name": _UPLOAD_NAME})
     assert archives.find_first.await_args_list == ([call(where={
-        "plugin_name": _UPLOAD_NAME, "plugin": {"is": {"manifest_json": manifest, "enabled": enabled}},
+        "plugin_name": _UPLOAD_NAME, "plugin": {"is": {
+            "id": "uploaded-id", "manifest_json": manifest, "enabled": enabled,
+        }},
     })] if reads else [])
     litellm.proxy.proxy_server.prisma_client.db.litellm_claudecodeplugintable.find_unique.assert_not_awaited()
+    events: Final = litellm.proxy.proxy_server.prisma_client.writer_db.litellm_claudecodeplugindownload
+    assert events.create.await_count == int(status == 200)
 
 
 @pytest.mark.asyncio
@@ -1359,3 +1365,103 @@ async def test_archive_requires_header_credentials_for_private_content(
     assert response.status_code == status, response.text
     assert (response.content == b"stored archive") is (status == 200)
     assert archives.find_first.await_count == int(status == 200)
+    events: Final = litellm.proxy.proxy_server.prisma_client.writer_db.litellm_claudecodeplugindownload
+    assert events.create.await_count == int(status == 200)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("authenticated", [False, True])
+async def test_archive_records_trusted_downloader_without_credentials(
+    upload_storage: _UploadClient, authenticated: bool,
+) -> None:
+    client, plugins, _ = upload_storage
+    plugins.find_unique.return_value.version = "2.1.0"
+    caller: Final = _granted_user([_UPLOAD_NAME]).model_copy(update={
+        "token": hash_token(_LIMITED_KEY), "user_email": "reader@example.test",
+        "key_alias": "development", "team_alias": "Engineering",
+    })
+    litellm.proxy.proxy_server.user_api_key_cache.set_cache(key=hash_token(_LIMITED_KEY), value=caller)
+    response: Final = await client.get(
+        _UPLOAD_PATH, headers={"Authorization": f"Bearer {_LIMITED_KEY}"} if authenticated else {},
+        params={"user_id": "forged-user", "user_email": "forged@example.test"},
+    )
+    assert response.status_code == 200, response.text
+    events: Final = litellm.proxy.proxy_server.prisma_client.writer_db.litellm_claudecodeplugindownload
+    events.create.assert_awaited_once_with(data={
+        "plugin_id": "uploaded-id", "version": "2.1.0", "digest": _UPLOAD_DIGEST,
+        "authenticated": authenticated,
+        "user_id": "granted-user" if authenticated else None,
+        "user_email": "reader@example.test" if authenticated else None,
+        "key_alias": "development" if authenticated else None,
+        "team_id": None,
+        "team_alias": "Engineering" if authenticated else None,
+    })
+
+
+@pytest.mark.asyncio
+async def test_download_history_returns_total_and_stable_scoped_cursor_page(upload_storage: _UploadClient) -> None:
+    client, _, _ = upload_storage
+    events: Final = litellm.proxy.proxy_server.prisma_client.writer_db.litellm_claudecodeplugindownload
+    events.count = AsyncMock(return_value=4)
+    events.find_many = AsyncMock(return_value=[
+        prisma_models.LiteLLM_ClaudeCodePluginDownload(
+            id=value, plugin_id="uploaded-id", downloaded_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
+            digest=_UPLOAD_DIGEST, authenticated=False,
+        ) for value in (3, 2, 1)
+    ])
+    response: Final = await client.get(
+        f"/claude-code/plugins/{_UPLOAD_NAME}/downloads",
+        headers={"Authorization": f"Bearer {MASTER_KEY}"}, params={"limit": 2, "cursor": "4"},
+    )
+    assert response.status_code == 200, response.text
+    assert response.json() == {
+        "total_downloads": 4, "next_cursor": "2",
+        "downloads": [{
+            "id": str(value), "downloaded_at": "2026-01-01T00:00:00Z",
+            "version": None, "digest": _UPLOAD_DIGEST, "authenticated": False,
+            "user_id": None, "user_email": None, "key_alias": None, "team_id": None, "team_alias": None,
+        } for value in (3, 2)],
+    }
+    events.count.assert_awaited_once_with(where={"plugin_id": "uploaded-id"})
+    events.find_many.assert_awaited_once_with(
+        where={"plugin_id": "uploaded-id", "id": {"lt": 4}}, order={"id": "desc"}, take=3,
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("key, query, exists, status", [
+    (_LIMITED_KEY, {}, True, 401),
+    (None, {}, True, 401),
+    (MASTER_KEY, {"cursor": "9223372036854775808"}, True, 422),
+    (MASTER_KEY, {"cursor": "0"}, True, 422),
+    (MASTER_KEY, {"limit": 101}, True, 422),
+    (MASTER_KEY, {}, False, 404),
+])
+async def test_download_history_rejects_unauthorized_invalid_and_unknown_requests(
+    upload_storage: _UploadClient, key: str | None, query: Mapping[str, str | int], exists: bool, status: int,
+) -> None:
+    client, plugins, _ = upload_storage
+    if not exists:
+        plugins.find_unique.return_value = None
+    response: Final = await client.get(
+        f"/claude-code/plugins/{_UPLOAD_NAME}/downloads",
+        headers={"Authorization": f"Bearer {key}"} if key else {}, params=query,
+    )
+    assert response.status_code == status, response.text
+    events: Final = litellm.proxy.proxy_server.prisma_client.writer_db.litellm_claudecodeplugindownload
+    events.find_many.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_download_history_checks_admin_before_database_availability() -> None:
+    with pytest.raises(HTTPException) as error:
+        await claude_code_marketplace.get_plugin_downloads(
+            plugin_name=_UPLOAD_NAME, uploads=None, user_api_key_dict=_granted_user([]),
+        )
+    assert error.value.status_code == 403
+
+    with pytest.raises(HTTPException) as unavailable:
+        await claude_code_marketplace.get_plugin_downloads(
+            plugin_name=_UPLOAD_NAME, uploads=None, user_api_key_dict=_USER,
+        )
+    assert unavailable.value.status_code == 500

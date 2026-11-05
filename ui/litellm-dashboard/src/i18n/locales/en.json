@@ -1731,7 +1731,30 @@
       "back": "Skills",
       "tabs": {
         "overview": "Overview",
-        "usage": "How to Use"
+        "usage": "How to Use",
+        "downloads": "Downloads"
+      },
+      "downloads": {
+        "title": "Download history",
+        "description": "ZIP downloads served by this gateway, including repeat downloads and client installs. External downloads are not tracked.",
+        "attributionNote": "Attribution reflects the credential used and can identify a shared key owner.",
+        "total": "Total downloads",
+        "downloadedAt": "Downloaded at",
+        "downloader": "User or key owner",
+        "key": "Key alias",
+        "team": "Team",
+        "version": "Version",
+        "anonymous": "Anonymous",
+        "unidentified": "Authenticated, no user identity",
+        "unavailable": "Not recorded",
+        "loading": "Loading download history…",
+        "loadFailed": "Could not load download history. Try refreshing.",
+        "empty": "No downloads recorded yet.",
+        "refresh": "Refresh",
+        "refreshing": "Refreshing download history…",
+        "loadMore": "Load more",
+        "loadingMore": "Loading more downloads…",
+        "unsupported": "Download metrics are only available for ZIP archives uploaded to this gateway. Downloads from external sources are not tracked."
       },
       "properties": {
         "category": "Category",

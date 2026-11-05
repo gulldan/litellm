@@ -14,7 +14,7 @@ import { getClaudeCodePluginsList, deleteClaudeCodePlugin } from "@/components/n
 import AddPluginForm from "./add_plugin_form";
 import PluginTable from "./PluginTable";
 import SkillDetail from "@/components/claude_code_plugins/skill_detail";
-import { isAdminRole } from "@/utils/roles";
+import { isAdminRole, isProxyAdminRole } from "@/utils/roles";
 import { toast } from "@/lib/toast";
 import { Plugin, ListPluginsResponse } from "@/components/claude_code_plugins/types";
 
@@ -85,7 +85,7 @@ const ClaudeCodePluginsPanel: React.FC<ClaudeCodePluginsPanelProps> = ({ accessT
         <SkillDetail
           skill={selectedSkill}
           onBack={() => setSelectedSkill(null)}
-          isAdmin={isAdmin}
+          isAdmin={isProxyAdminRole(userRole || "")}
           accessToken={accessToken}
           onPublishClick={fetchPlugins}
         />
