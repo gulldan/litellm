@@ -571,6 +571,8 @@ class LiteLLMRoutes(enum.Enum):
     )
     llm_api_routes_without_mcp = sorted(set(llm_api_routes) - set(mcp_inference_routes))
     info_routes = [
+        "/usage/alert-groups",
+        "/usage/alert-models",
         "/usage/alert-rules",
         "/usage/alert-rules/{rule_id}",
         "/usage/alerts",
@@ -642,6 +644,8 @@ class LiteLLMRoutes(enum.Enum):
 
     management_routes = (
         [
+            "/usage/alert-groups",
+            "/usage/alert-models",
             "/usage/alert-rules",
             "/usage/alert-rules/{rule_id}",
             "/usage/alerts",
@@ -856,6 +860,8 @@ class LiteLLMRoutes(enum.Enum):
     )
 
     usage_alert_routes = (
+        "/usage/alert-groups",
+        "/usage/alert-models",
         "/usage/alert-rules",
         "/usage/alert-rules/{rule_id}",
         "/usage/alerts",
