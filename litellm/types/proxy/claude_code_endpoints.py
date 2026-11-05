@@ -2,6 +2,8 @@
 Claude Code Marketplace endpoint types for LiteLLM Proxy
 """
 
+from collections.abc import Mapping
+from datetime import datetime
 from typing import Final, Literal, TypeAlias
 
 from pydantic import AliasChoices, ConfigDict, Field, TypeAdapter, model_validator
@@ -32,7 +34,7 @@ class PluginMetadata(LiteLLMBaseModel):
 
     model_config = ConfigDict(frozen=True)
 
-    version: str | None = Field("1.0.0", description="Semantic version")
+    version: str | None = Field("1.0.0", description="Semantic version, defaults to 1.0.0 on creation")
     description: str | None = Field(None, description="Plugin description")
     author: PluginAuthor | None = Field(None, description="Plugin author")
     homepage: str | None = Field(None, description="Plugin homepage URL")
@@ -105,11 +107,34 @@ class UpdatePluginRequest(PluginSpec):
 
     The plugin name is the resource identity and is supplied as the path
     parameter, so it cannot be changed here. This is a full replace: omitted
-    fields reset to their defaults, so version is cleared rather than
-    defaulting to the create-time "1.0.0".
+    fields reset to their defaults, except version which automatically increments
+    the published patch version when omitted or null.
     """
 
-    version: str | None = Field(None, description="Semantic version; cleared if omitted")
+    version: str | None = Field(None, description="Explicit higher SemVer, or omit/null for an automatic patch bump")
+    expected_updated_at: datetime | None = Field(
+        None, description="Published updated_at read by the editor. A stale value returns 409", exclude=True
+    )
+
+
+class PluginVersionResponse(LiteLLMBaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    id: str
+    version: str | None
+    description: str | None
+    manifest: Mapping[str, object]
+    published_at: datetime | None
+    published_by: str | None
+    content_kind: Literal["stored_archive", "source_reference"]
+    archive_path: str | None
+
+
+class ListPluginVersionsResponse(LiteLLMBaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    versions: tuple[PluginVersionResponse, ...]
+    next_offset: int | None
 
 
 class PluginResponse(LiteLLMBaseModel):

@@ -2573,7 +2573,8 @@ export interface paths {
          *     The plugin is identified by its name in the path, which is the resource
          *     identity and cannot be changed here. This is a full replace, not a merge:
          *     the manifest is rebuilt from the request body, so any optional field left
-         *     out is reset to its default (e.g. an omitted version is cleared, not kept).
+         *     out is reset to its default, except version which automatically increments
+         *     the published patch version when omitted or null.
          *     Send the full desired state.
          *
          *     Returns 404 if no plugin with the given name exists; use
@@ -2688,6 +2689,46 @@ export interface paths {
          *         - plugin_name: The name of the plugin to enable
          */
         post: operations["enable_plugin_claude_code_plugins__plugin_name__enable_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/claude-code/plugins/{plugin_name}/versions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Plugin Versions
+         * @description Read published metadata history. External source references are not archived content.
+         */
+        get: operations["list_plugin_versions_claude_code_plugins__plugin_name__versions_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/claude-code/plugins/{plugin_name}/versions/{version_id}/archive": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Download Plugin Version
+         * @description Download retained uploaded bytes under the current skill's visibility policy.
+         */
+        get: operations["download_plugin_version_claude_code_plugins__plugin_name__versions__version_id__archive_get"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -34711,6 +34752,13 @@ export interface components {
             /** Total Pages */
             total_pages: number;
         };
+        /** ListPluginVersionsResponse */
+        ListPluginVersionsResponse: {
+            /** Next Offset */
+            next_offset: number | null;
+            /** Versions */
+            versions: components["schemas"]["PluginVersionResponse"][];
+        };
         /**
          * ListPluginsResponse
          * @description Response from listing plugins.
@@ -41577,6 +41625,30 @@ export interface components {
              */
             version?: string | null;
         };
+        /** PluginVersionResponse */
+        PluginVersionResponse: {
+            /** Archive Path */
+            archive_path: string | null;
+            /**
+             * Content Kind
+             * @enum {string}
+             */
+            content_kind: "stored_archive" | "source_reference";
+            /** Description */
+            description: string | null;
+            /** Id */
+            id: string;
+            /** Manifest */
+            manifest: {
+                [key: string]: unknown;
+            };
+            /** Published At */
+            published_at: string | null;
+            /** Published By */
+            published_by: string | null;
+            /** Version */
+            version: string | null;
+        };
         /**
          * PolicyAttachmentCreateRequest
          * @description Request body for creating a policy attachment.
@@ -43012,7 +43084,7 @@ export interface components {
             };
             /**
              * Version
-             * @description Semantic version
+             * @description Semantic version, defaults to 1.0.0 on creation
              * @default 1.0.0
              */
             version: string | null;
@@ -49326,8 +49398,8 @@ export interface components {
          *
          *     The plugin name is the resource identity and is supplied as the path
          *     parameter, so it cannot be changed here. This is a full replace: omitted
-         *     fields reset to their defaults, so version is cleared rather than
-         *     defaulting to the create-time "1.0.0".
+         *     fields reset to their defaults, except version which automatically increments
+         *     the published patch version when omitted or null.
          */
         UpdatePluginRequest: {
             /** @description Plugin author */
@@ -49347,6 +49419,11 @@ export interface components {
              * @description Skill domain (e.g., 'Productivity')
              */
             domain?: string | null;
+            /**
+             * Expected Updated At
+             * @description Published updated_at read by the editor. A stale value returns 409
+             */
+            expected_updated_at?: string | null;
             /**
              * Homepage
              * @description Plugin homepage URL
@@ -49380,7 +49457,7 @@ export interface components {
             };
             /**
              * Version
-             * @description Semantic version; cleared if omitted
+             * @description Explicit higher SemVer, or omit/null for an automatic patch bump
              */
             version?: string | null;
         };
@@ -49963,7 +50040,7 @@ export interface components {
             namespace?: string | null;
             /**
              * Version
-             * @description Semantic version
+             * @description Semantic version, defaults to 1.0.0 on creation
              * @default 1.0.0
              */
             version: string | null;
@@ -56102,6 +56179,70 @@ export interface operations {
                 content: {
                     "application/json": unknown;
                 };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_plugin_versions_claude_code_plugins__plugin_name__versions_get: {
+        parameters: {
+            query?: {
+                limit?: number;
+                offset?: number;
+            };
+            header?: never;
+            path: {
+                plugin_name: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ListPluginVersionsResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    download_plugin_version_claude_code_plugins__plugin_name__versions__version_id__archive_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                plugin_name: string;
+                version_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
             /** @description Validation Error */
             422: {

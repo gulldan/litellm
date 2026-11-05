@@ -468,6 +468,8 @@ class LiteLLMRoutes(enum.Enum):
         "/claude-code/plugins",
         "/claude-code/plugins/upload",
         "/claude-code/plugins/{plugin_name}/archive/{digest}.zip",
+        "/claude-code/plugins/{plugin_name}/versions",
+        "/claude-code/plugins/{plugin_name}/versions/{version_id}/archive",
         "/claude-code/plugins/{plugin_name}",
     ]
 
